@@ -61,7 +61,11 @@ def stub_pipeline(monkeypatch):
     monkeypatch.setattr("paper2manim.agents.coder.get_llm", lambda *a, **kw: llm)
     monkeypatch.setattr("paper2manim.agents.summarizer.get_llm", lambda *a, **kw: llm)
     monkeypatch.setattr("paper2manim.agents.reviewer.get_llm", lambda *a, **kw: llm)
-    monkeypatch.setattr("paper2manim.graphs.mvp2.parse_pdf", lambda p: "# Test paper\nbody")
+    from paper2manim.parsers import ParsedInput
+    monkeypatch.setattr(
+        "paper2manim.graphs.mvp2.parse_local_pdf",
+        lambda p: ParsedInput(text="# Test paper\nbody", fmt="markdown", source="pdf:fake.pdf"),
+    )
 
     # First two render calls fail with latex error; third succeeds.
     render_calls = {"n": 0}

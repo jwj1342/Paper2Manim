@@ -21,7 +21,7 @@ from paper2manim.artifacts import (
     run_dir,
     save_attempt_result,
 )
-from paper2manim.parsers.marker import parse_pdf
+from paper2manim.parsers import parse_arxiv, parse_local_pdf
 from paper2manim.sandbox.concat import concat_videos
 from paper2manim.sandbox.render import render
 from paper2manim.state import PaperState
@@ -30,14 +30,36 @@ log = logging.getLogger(__name__)
 
 
 def parser_node(state: PaperState) -> dict[str, Any]:
-    pdf = state.get("pdf_path")
-    if not pdf:
-        return {"fatal_error": "parser: pdf_path missing"}
-    md = parse_pdf(pdf)
+    kind = state.get("input_kind")
+    try:
+        if kind == "arxiv":
+            spec = state.get("arxiv_spec")
+            if not spec:
+                return {"fatal_error": "parser: arxiv_spec missing"}
+            parsed = parse_arxiv(spec, section=state.get("arxiv_section"))
+        elif kind == "pdf":
+            pdf = state.get("pdf_path")
+            if not pdf:
+                return {"fatal_error": "parser: pdf_path missing"}
+            parsed = parse_local_pdf(pdf)
+        else:
+            return {"fatal_error": f"parser: unsupported input_kind {kind!r} for MVP 2.0"}
+    except Exception as exc:  # arxiv download error / Marker import error / etc.
+        return {"fatal_error": f"parser: {type(exc).__name__}: {exc}"}
+
     if state.get("run_id"):
-        (run_dir(state["run_id"]) / "parsed.md").write_text(md, encoding="utf-8")
-        append_trace(state["run_id"], "parser", {"chars": len(md)})
-    return {"parsed_markdown": md}
+        ext = "tex" if parsed.fmt == "latex" else "md"
+        (run_dir(state["run_id"]) / f"parsed.{ext}").write_text(parsed.text, encoding="utf-8")
+        append_trace(
+            state["run_id"],
+            "parser",
+            {"chars": len(parsed.text), "fmt": parsed.fmt, "source": parsed.source},
+        )
+    return {
+        "parsed_markdown": parsed.text,
+        "parsed_format": parsed.fmt,
+        "parser_source": parsed.source,
+    }
 
 
 def init_scene_node(state: PaperState) -> dict[str, Any]:

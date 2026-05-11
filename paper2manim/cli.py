@@ -107,29 +107,40 @@ def mvp1(input_arg: str, quality: str | None, no_render: bool, allow_render_on_l
 
 
 @cli.command()
-@click.option("--pdf", "pdf_path", required=True, type=click.Path(exists=True))
+@click.option("--pdf", "pdf_path", default=None, type=click.Path(exists=True),
+              help="Local PDF file. Parsed via Marker.")
+@click.option("--arxiv", "arxiv_spec", default=None,
+              help="arXiv id/URL (e.g. '1706.03762' or 'https://arxiv.org/abs/1706.03762v2'). "
+                   "Uses author's LaTeX source when available; falls back to Marker on the PDF.")
+@click.option("--section", "arxiv_section", default=None,
+              help="Optional substring of a \\section{...} title to slice from the arXiv source "
+                   "(e.g. 'Method'). Ignored for --pdf.")
 @click.option("--quality", default=None, type=click.Choice(["l", "m", "h"]))
 @click.option("--max-retries", default=None, type=int)
 @click.option("--no-render", is_flag=True)
 @click.option("--allow-render-on-login", is_flag=True)
 def mvp2(
-    pdf_path: str,
+    pdf_path: str | None,
+    arxiv_spec: str | None,
+    arxiv_section: str | None,
     quality: str | None,
     max_retries: int | None,
     no_render: bool,
     allow_render_on_login: bool,
 ) -> None:
-    """MVP 2.0: full PDF -> multi-scene video with reflection loop."""
+    """MVP 2.0: paper -> multi-scene video with reflection loop.
+
+    Input: exactly one of --pdf <path> or --arxiv <id|url>.
+    """
+    if bool(pdf_path) == bool(arxiv_spec):
+        raise click.UsageError("Provide exactly one of --pdf or --arxiv.")
     if not no_render:
         _block_login_node_render(allow_render_on_login)
     from paper2manim.graphs.mvp2 import build_mvp2_graph
 
     run_id = new_run_id()
-    save_input(run_id, pdf_path=pdf_path)
     state: PaperState = {
         "run_id": run_id,
-        "input_kind": "pdf",
-        "pdf_path": str(Path(pdf_path).resolve()),
         "attempts": [],
         "rendered_videos": [],
         "skipped_scenes": [],
@@ -139,7 +150,20 @@ def mvp2(
         "quality": quality or settings.PAPER2MANIM_QUALITY,  # type: ignore[typeddict-item]
         "skip_render": no_render,
     }
-    console.print(f"[cyan]MVP 2.0 run {run_id}[/cyan]: {pdf_path}")
+    if pdf_path:
+        save_input(run_id, pdf_path=pdf_path)
+        state["input_kind"] = "pdf"
+        state["pdf_path"] = str(Path(pdf_path).resolve())
+        console.print(f"[cyan]MVP 2.0 run {run_id}[/cyan] (pdf): {pdf_path}")
+    else:
+        (run_dir(run_id) / "input.arxiv.txt").write_text(
+            f"{arxiv_spec}\nsection={arxiv_section or ''}\n", encoding="utf-8"
+        )
+        state["input_kind"] = "arxiv"
+        state["arxiv_spec"] = arxiv_spec
+        state["arxiv_section"] = arxiv_section
+        tag = f" §{arxiv_section}" if arxiv_section else ""
+        console.print(f"[cyan]MVP 2.0 run {run_id}[/cyan] (arxiv): {arxiv_spec}{tag}")
     g = build_mvp2_graph()
     final = g.invoke(state, config={"recursion_limit": 80})
     _print_summary(final)

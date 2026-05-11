@@ -58,12 +58,18 @@ class Attempt(TypedDict, total=False):
 class PaperState(TypedDict, total=False):
     # ---- Inputs ----
     run_id: str
-    input_kind: Literal["text", "pdf"]
+    input_kind: Literal["text", "pdf", "arxiv"]
     raw_text: str | None  # MVP 1.0
-    pdf_path: str | None  # MVP 2.0
+    pdf_path: str | None  # MVP 2.0 local PDF
+    arxiv_spec: str | None  # MVP 2.0 arxiv id / url / "arXiv:1706.03762"
+    arxiv_section: str | None  # optional: slice a single \section{...} from source
 
     # ---- MVP 2.0 parsing/summarization ----
+    # `parsed_markdown` holds the parser's flattened text regardless of source format.
+    # Use `parsed_format` to disambiguate: "markdown" (Marker) vs "latex" (arXiv source).
     parsed_markdown: str | None
+    parsed_format: Literal["markdown", "latex"] | None
+    parser_source: str | None  # origin tag, e.g. "arxiv-src:1706.03762"
     summary: dict | None  # SummaryModel.model_dump()
 
     # ---- Storyboard ----

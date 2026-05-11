@@ -28,7 +28,7 @@
 | **MVP 2.0** | 进行中 | 完整 PDF | Parser(Marker) → Summarizer → Storyboarder → Coder ⇄ Reviewer 反思闭环 → Concat | 1–2 分钟多场景视频 | 反思机制对 Pass@1 的提升 |
 | MVP 3.0 | 计划中 | PDF + 用户风格 | + VLM Critic + 图表抽取 + TTS 音画同步 | 3–5 分钟带配音视频 | 视觉感知与多模态融合 |
 
-**当前状态**：MVP 1.0 端到端已验证（LLM 生成代码 + 沙盒渲染均成功）。MVP 2.0 的全部 agents、graph 拓扑、反思 conditional edge 已实现并通过单测，待真实论文跑通验收。详细进度与 To Do 清单见 [`docs/progress.md`](./docs/progress.md)。
+**当前状态**：MVP 1.0 端到端已验证（LLM 生成代码 + 沙盒渲染均成功）。MVP 2.0 的全部 agents、graph 拓扑、反思 conditional edge 已实现并通过单测，待真实论文跑通验收。MVP 3.0 的 VLM Critic 与 visual revision 智能体脚手架已合入（见 `paper2manim/infrastructure/vlm/` 与 `paper2manim/agents/vlm_scene_reviewer.py`），尚未接入 `graphs/mvp2.py`，留待 issue #1 的 D2 / D5 讨论收敛后落地。详细进度与 To Do 清单见 [`docs/progress.md`](./docs/progress.md)。
 
 > **新协作者请直接阅读 [`docs/getting-started.md`](./docs/getting-started.md)**——一份在普通笔记本 / 服务器上从零跑通的详尽入门指南，含三大平台依赖、API key 申请、第一个 demo、看视频、改 prompt、常见报错排查。
 
@@ -137,20 +137,36 @@ paper2manim mvp1 --input examples/mvp1/fourier_intuition.txt --quality m
 paper2manim mvp1 --input examples/mvp1/eulers_identity.txt --no-render
 ```
 
-### MVP 2.0：完整 PDF → 多场景视频（带反思纠错）
+### MVP 2.0：完整论文 → 多场景视频（带反思纠错）
 
-输入是一个 PDF 文件路径。系统先用 Marker 把 PDF 转成保留公式的 markdown，然后 Summarizer / Storyboarder 拆出 2–5 个 scene，逐 scene 让 Coder 写代码并由 Reviewer 在沙盒里检验，失败则带着结构化错误反馈让 Coder 修复，最多重试 `PAPER2MANIM_MAX_RETRIES` 次。最后用 ffmpeg 把成功的 scene 串成最终视频。
+输入两种来源任选其一：
+
+1. **`--arxiv <id|url>` （推荐）**：直接抓 arXiv 上作者上传的 LaTeX 源码，自动展开 `\input{}` / `\include{}` 并去注释。公式 100% 准确（原始 LaTeX 而非 OCR），双栏顺序天然正确。可选 `--section <name>` 截单节（按 `\section{...}` 标题做大小写不敏感子串匹配）。作者只上传了 PDF 时自动回退到 Marker 解析 PDF。
+2. **`--pdf <path>`**：本地 PDF，走 Marker（首次下 ~3GB 模型权重）。
+
+得到论文文本后，Summarizer / Storyboarder 拆出 2–5 个 scene，逐 scene 让 Coder 写代码并由 Reviewer 在沙盒里检验，失败则带着结构化错误反馈让 Coder 修复，最多重试 `PAPER2MANIM_MAX_RETRIES` 次。最后用 ffmpeg 把成功的 scene 串成最终视频。
 
 ```bash
-# 完整跑通一篇论文
+# arXiv 源码（全文）
+paper2manim mvp2 --arxiv 1706.03762
+
+# 只跑某一节（截 §3.2）
+paper2manim mvp2 --arxiv 1706.03762 --section "Scaled Dot-Product Attention"
+
+# arXiv URL 也行
+paper2manim mvp2 --arxiv https://arxiv.org/abs/2401.12345v2
+
+# 本地 PDF（Marker 路径）
 paper2manim mvp2 --pdf path/to/your-paper.pdf
 
 # 调整反思轮数 + 渲染质量
-paper2manim mvp2 --pdf paper.pdf --max-retries 5 --quality m
+paper2manim mvp2 --arxiv 1706.03762 --max-retries 5 --quality m
 
 # 只生成代码不渲染（验证 prompt + 反思逻辑）
-paper2manim mvp2 --pdf paper.pdf --no-render
+paper2manim mvp2 --arxiv 1706.03762 --no-render
 ```
+
+> 网络要求：`--arxiv` 需要能访问 `arxiv.org`。HPC 计算节点的 squid 代理可能拒绝该域名 → 在登录节点跑 `--no-render` 部分；渲染部分（不需要外网）再去 salloc 计算节点。
 
 ### 输出工件
 
@@ -202,9 +218,12 @@ Paper2Manim/
 ├── paper2manim/               ← 主 Python 包（pip install -e . 后可 import）
 │   ├── __init__.py
 │   ├── cli.py                   click 命令行入口；子命令 mvp1 / mvp2 / info
-│   ├── config.py                pydantic-settings 从 .env 读取所有运行时配置
+│   ├── config/                  pydantic-settings 包
+│   │   ├── env.py                 从 .env 读取运行时配置（MIMO_API_KEY 等）
+│   │   └── settings.py            YAML-based AppSettings（多 provider 模型注册）
 │   ├── llm.py                   MiMo (Xiaomi Token Plan) 客户端工厂
 │   │                            含模型 alias：flash → mimo-v2.5, pro → mimo-v2.5-pro
+│   │                            + safe_structured_invoke（C3 修复，schema drift 重试）
 │   ├── state.py                 LangGraph 共享状态 TypedDict (PaperState)
 │   │                            所有 agent 节点的输入输出契约都在这里
 │   ├── prompts.py               从 prompts/*.md 读取 system prompt（热加载）
@@ -215,37 +234,65 @@ Paper2Manim/
 │   │   ├── storyboarder.py        text/summary → Storyboard JSON（MVP 1.0）
 │   │   ├── coder.py               scene + error_feedback → Manim 代码（MVP 1.0）
 │   │   ├── summarizer.py          markdown → 关键贡献 / 公式 / 概念（MVP 2.0）
-│   │   └── reviewer.py            RenderResult → retry / give_up + hint（MVP 2.0）
+│   │   ├── reviewer.py            RenderResult → retry / give_up + hint（MVP 2.0）
+│   │   ├── vlm_scene_reviewer.py  渲染帧 → VisualReviewResult（MVP 3.0 脚手架，未接图）
+│   │   └── visual_revision_agent.py  失败的 VisualReview → 修订后代码（MVP 3.0 脚手架）
 │   │
 │   ├── parsers/                 ← 输入解析器
+│   │   ├── __init__.py            分派器：parse_arxiv / parse_local_pdf；ParsedInput 命名元组
 │   │   ├── text.py                MVP 1.0：plain text 直通
-│   │   └── marker.py              MVP 2.0：用 Marker 把 PDF 转 markdown（含公式 LaTeX）
+│   │   ├── arxiv_source.py        MVP 2.0：抓 arxiv.org/e-print/<id>，flatten \input，可选截 \section
+│   │   └── marker.py              MVP 2.0：用 Marker 把 PDF 转 markdown（arxiv 无源码时的兜底）
 │   │
 │   ├── sandbox/                 ← Manim 代码的隔离执行 + 错误结构化
-│   │   ├── render.py              subprocess 调 manim CLI；含 setrlimit（CPU/内存/文件大小限制）
+│   │   ├── render.py              subprocess 调 manim CLI；含 setrlimit + 静态预检
 │   │   ├── classify.py            stderr 分类：python / latex / manim_runtime / timeout
 │   │   └── concat.py              ffmpeg concat demuxer 拼多 scene 为单 mp4
+│   │
+│   ├── quality/                 ← 代码安全 / 静态检查
+│   │   └── manim_static_checker.py  AST 黑名单（os/subprocess/eval/exec/Paragraph 等）
+│   │                                + 结构校验（Scene 子类、≥2 self.play）
+│   │                                在 render() 入口处先于 subprocess 拦截
 │   │
 │   ├── graphs/                  ← LangGraph 工作流定义
 │   │   ├── mvp1.py                线性拓扑：storyboarder → coder → render → END
 │   │   └── mvp2.py                含反思 conditional edge 的多 scene 拓扑
 │   │                              （reviewer 后分流：retry → coder | advance → next scene）
 │   │
-│   └── schemas/                 ← Pydantic 数据契约
-│       ├── storyboard.py          SceneModel / StoryboardModel（PascalCase 校验）
-│       ├── summary.py             SummaryModel + FormulaItem（MVP 2.0）
-│       └── error_feedback.py      RenderResultModel / ErrorFeedback
+│   ├── schemas/                 ← Pydantic 数据契约
+│   │   ├── storyboard.py          SceneModel / StoryboardModel（PascalCase 校验）
+│   │   ├── summary.py             SummaryModel + FormulaItem（MVP 2.0）
+│   │   └── error_feedback.py      RenderResultModel / ErrorFeedback
+│   │
+│   ├── domain/                  ← 合作者引入的 DDD 领域模型（独立于 LangGraph state）
+│   │   └── models.py              SceneSpec / PaperVideoPlan / VisualReviewResult 等
+│   │                              当前为 MVP 3.0 VLM 子系统服务，未与 PaperState 融合
+│   │
+│   ├── infrastructure/          ← 多 provider 抽象层（合作者）
+│   │   ├── models/                openai_compatible / mock 模型客户端 + factory + registry
+│   │   ├── llm/                   LLMClient（基于 models/ 的高层包装）
+│   │   ├── vlm/                   VLMClient Protocol + Doubao（豆包）+ Mock 实现
+│   │   └── rendering/             另一份 manim 渲染器（与 sandbox/render.py 并存）
+│   │
+│   └── utils/                   ← 通用工具
+│       ├── prompt_loader.py       从 repo-root prompts/ 加载 + 拼接 global_system.md
+│       └── text_utils.py          ```python``` 块抽取 / JSON 抽取等
 │
 ├── prompts/                   ← 所有 LLM 系统提示词（外置 / 热加载）
+│   ├── global_system.md         所有 agent 共享的人设头（被 load_agent_prompt 拼接）
 │   ├── storyboarder.md          剧本导演人设 + JSON schema + 一个 one-shot 示例
 │   ├── coder.md                 Manim 工程师人设 + 0.20 API 限制 + 反思修复模板
 │   ├── manim_skill_rules.md     Manim 0.20 API 速查（被 coder.md 引用）
 │   ├── summarizer.md            论文摘要器（MVP 2.0）
-│   └── reviewer.md              代码审阅器（MVP 2.0），含 retry / give_up 启发
+│   ├── reviewer.md              代码审阅器（MVP 2.0），含 retry / give_up 启发
+│   ├── vlm_scene_reviewer.md    渲染帧视觉评审 prompt（MVP 3.0）
+│   └── visual_revision_agent.md 据视觉反馈修订代码 prompt（MVP 3.0）
 │
-├── tests/                     ← pytest 测试套件
+├── config.example.yaml        ← AppSettings YAML 模板（多 provider 模型注册表）
+│
+├── tests/                     ← pytest 测试套件（28/28 通过）
 │   ├── conftest.py              共享 fixtures（隔离 runs 目录、mock LLM）
-│   ├── test_classify.py         9 个错误分类用例
+│   ├── test_classify.py         错误分类用例 + 静态检查器集成（D1/D4）
 │   ├── test_llm_client.py       MiMo client 边界条件（key 缺失、未知 alias）
 │   ├── test_storyboarder.py     mock LLM 验证结构化输出
 │   ├── test_coder.py            python 块抽取、error_feedback 回灌进 prompt

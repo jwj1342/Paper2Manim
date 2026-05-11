@@ -1,19 +1,21 @@
 # Progress
 
-> 更新时间：2026-05-10（含初次代码 review 后的 3 个 CRITICAL 修复）
+> 更新时间：2026-05-11（合入合作者 fix 分支：static checker + 多 provider 抽象 + VLM 脚手架）
 
 ## 总览
 
 | 模块 | 状态 | 备注 |
 |---|---|---|
 | 项目骨架 | 完成 | pyproject / .env / .gitignore / README / docs |
-| 核心模块（state/llm/config/prompts/artifacts/cli） | 完成 | 25/25 单测通过 |
-| Sandbox（render/classify/concat） | 完成 | subprocess + rlimit；分类器覆盖 4 大类错误 |
+| 核心模块（state/llm/config/prompts/artifacts/cli） | 完成 | config 已包化（env.py + settings.py） |
+| Sandbox（render/classify/concat） | 完成 | subprocess + rlimit + 静态预检（quality/manim_static_checker） |
 | MVP 1.0 agents（storyboarder, coder） | 完成 | 端到端验证通过 |
 | MVP 2.0 agents（summarizer, reviewer） | 完成 | 单测通过；待真实 PDF 验收 |
+| MVP 3.0 脚手架（VLM critic + visual revision） | 已合入 | 模块就位；尚未接入 graphs/mvp2.py |
 | Graphs（mvp1, mvp2） | 完成 | mvp2 含 should_retry / has_more_scenes 两个 conditional edges |
-| Prompts（5 个） | 完成 | 外置在 `prompts/*.md`，热加载 |
-| 测试 | 完成 | 25/25 单测；slow 标记的真实渲染冒烟测已规划 |
+| Prompts（8 个） | 完成 | 外置在 `prompts/*.md`，含 global_system 共享头 |
+| 多 provider 抽象（infrastructure/models, llm, vlm） | 合入待整合 | 与 main 的 `llm.py` 并存；后续在 D3 决议后统一 |
+| 测试 | 完成 | 28/28 单测；slow 标记的真实渲染冒烟测已规划 |
 | 端到端验收（MVP 1.0） | 完成 | pythagorean 输入 → 10.47s mp4 |
 | 端到端验收（MVP 2.0） | 进行中 | 反思 cycle 单测已通过；待真实论文跑通 |
 
@@ -105,6 +107,16 @@
 
 剩余 9 个 HIGH 与 12 个 MEDIUM 见 To Do.F「工程债」。
 
+### 合入合作者 fix 分支（issue #1 D1 / D3 / D4 + D2/D5 脚手架）
+
+通过三次主题化 merge 把 `fix/api-client-config` 上的代码合入 main：
+
+1. **D3 — 多 provider 模型抽象**（commit `22d833b`）：`paper2manim/infrastructure/models/` + `infrastructure/llm/client.py` + `config/settings.py`（YAML AppSettings）+ `config.example.yaml`。与 main 的 `paper2manim/llm.py` 并存，未替换 LangGraph 节点中的客户端调用。`config.py` 重构为 `config/` 包；`config/__init__.py` 同时 re-export 旧的 env 配置与新的 AppSettings，确保 `from paper2manim.config import AppSettings` / `from paper2manim.config.env import settings` 都通。
+2. **D1 + D4 — 渲染前静态检查**（commit `113b791`）：`paper2manim/quality/manim_static_checker.py`，在 `sandbox/render.py` 进入 subprocess 前先做 AST 黑名单扫描（os/subprocess/socket/shutil/eval/exec/Path.write_text/Paragraph 等）+ 结构校验（必须 `from manim import *`、必须有 `Scene` 子类、必须 ≥2 个 `self.play(`）。失败转为 `StaticCheckError` 错误结果，不启动渲染子进程。D1 调整：解禁 `Tex` / `MathTex`（公式必须），保留 `Paragraph` 禁用（防 wall-of-text）。新增 3 条集成测试覆盖。
+3. **D2 / D5 脚手架 — VLM 视觉评审**（commit `519308f`）：`paper2manim/infrastructure/vlm/`（VLMClient Protocol + Doubao/豆包 实现 + Mock + factory）、`paper2manim/agents/vlm_scene_reviewer.py`、`paper2manim/agents/visual_revision_agent.py`、`paper2manim/domain/models.py`（1005 行领域模型：SceneSpec / PaperVideoPlan / VisualReviewResult 等）、`paper2manim/utils/{prompt_loader,text_utils}.py`、新增 `prompts/{global_system,vlm_scene_reviewer,visual_revision_agent}.md`。**未接入 graphs/mvp2.py**，待 issue #1 的 D2 / D5 讨论收敛后再决定整合策略。
+
+整合后回归：`pytest` **28/28 通过**；`paper2manim.{config.env,config,llm,state,graphs.mvp1,graphs.mvp2,sandbox.render,quality.manim_static_checker,utils.prompt_loader}` 全部 import 通过；`prompt_loader.PROMPT_DIR` 正确指向 repo-root `prompts/`（合并时调整为 `parents[2]`，避开与 `paper2manim/prompts.py` 模块同名）。
+
 ---
 
 ## In Progress
@@ -122,9 +134,11 @@
 ## To Do
 
 ### A. MVP 2.0 收尾（短期）
-- [ ] 安装 marker-pdf 并预下载模型（首次跑必触发）
-- [ ] 准备 1–2 篇短论文 PDF 放 `examples/mvp2/`
+- [x] **arXiv 源码路径**（方案 C）：`paper2manim/parsers/arxiv_source.py` + 分派 `parsers/__init__.py`；CLI 加 `--arxiv <id|url>` / `--section <name>`；state 增 `input_kind="arxiv"` + `arxiv_spec` / `arxiv_section` / `parsed_format` / `parser_source`；summarizer prompt 增加 LaTeX 输入分支；18 条新单测（id 解析 / flatten / 截节 / tarball 解压）。author 只传 PDF 时自动回退 Marker（`SourceUnavailable`）。
+- [ ] 安装 marker-pdf 并预下载模型（仅当用 `--pdf` 或 arXiv 回退路径时需要）
+- [ ] 端到端跑通：`paper2manim mvp2 --arxiv 1706.03762 --section "Scaled Dot-Product Attention"`（需能访问 arxiv.org）
 - [ ] 端到端跑通：`paper2manim mvp2 --pdf examples/mvp2/<paper>.pdf`
+- [ ] 同一论文的双路径对比：`--arxiv` vs `--pdf`，记录 storyboard / summary 差异
 - [ ] 用一个故意 LaTeX 错的输入观察反思 retry 是否真触发并成功修复（也可手改 prompt 制造）
 - [ ] 测量同样输入下：`max_retries=0`（disable reflection）vs `max_retries=3` 的成功率差异
 
@@ -150,7 +164,10 @@
 - [ ] 写论文实验章节
 
 ### E. MVP 3.0 探索（远期）
-- [ ] VLM Critic：渲染单帧 / 抽 N 帧后用多模态 LLM 评估遮挡 / 出界
+- [x] VLM Critic 脚手架（agents/vlm_scene_reviewer.py + infrastructure/vlm/）已合入，未接图
+- [ ] 把 `vlm_scene_reviewer` + `visual_revision_agent` 接入 `graphs/mvp2.py` 的反思闭环（D2 / D5 决议后）
+- [ ] 把 `paper2manim.domain` 的富领域模型与 `state.py` 的 `PaperState` 调和（沿用 TypedDict + reducer 还是改成 Pydantic）
+- [ ] 把 `paper2manim.llm` 与 `paper2manim.infrastructure.llm.client` 收敛到单一客户端层（D3）
 - [ ] 图表抽取：原图嵌入 `ImageMobject`；或用代码复现图表
 - [ ] TTS 集成：ElevenLabs / 系统 TTS；按 storyboard 时间戳同步
 - [ ] camera：MovingCameraScene 高级运镜
@@ -167,8 +184,9 @@
 
 ## Known Issues
 
-- **HPC 计算节点 squid 代理白名单**：在某些集群（如 Vulcan）的计算节点上，`api.xiaomimimo.com` 与 `chromium.googlesource.com` 会被代理拒绝（403）。表现：在计算节点装 manim 失败（skia-pathops 拉不到源码）+ 调 LLM 失败（API connection error）。
-  - **绕开**：在登录节点（外网更宽松）装好 manim、跑 LLM；只在计算节点跑 manim render（不需要外网）。
+- **HPC 计算节点 squid 代理白名单**：在某些集群（如 Vulcan）的计算节点上，`api.xiaomimimo.com` / `chromium.googlesource.com` / `arxiv.org` 都会被代理拒绝（403）。表现：装 manim 失败（skia-pathops）+ 调 LLM 失败 + `--arxiv` 抓不到源码。
+  - **绕开**：在登录节点（外网更宽松）装好 manim、跑 LLM 节点（parser / summarizer / storyboarder / coder / reviewer）；只在计算节点跑 manim render（不需要外网）。当前 CLI 还没拆分阶段执行（见 To Do B 的 `--resume <run_id>`）。
+  - **`--arxiv` 失败模式**：`parser_node` 会把任何下载异常吞成 `fatal_error`，整图通过 `_is_fatal` 早退到 END，不会让进程崩。
 - **Pydantic 序列化 UserWarning**：`langchain-openai==0.3.35` 配合 `pydantic==2.13` 调 `with_structured_output(Model)` 时会在调用栈里打印一个 `PydanticSerializationUnexpectedValue` 警告，不影响功能。已观察到在 storyboarder/summarizer 节点出现。
 - **Marker 首跑慢 + 占空间大**：MVP 2.0 的 PDF 解析首次会下载 ~3GB 模型权重到 `~/.cache/huggingface/`。
 - **Manim OpenGL 在无显示节点崩溃**：已通过强制 `--renderer=cairo` 解决，但若用户显式指定 `--renderer=opengl` 不在 sandbox 控制范围内（暂无该选项）。
