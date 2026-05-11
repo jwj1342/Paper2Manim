@@ -1,6 +1,6 @@
 """End-to-end smoke test for the MVP 1.0 graph (mocks LLM and render)."""
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 

@@ -19,7 +19,7 @@ class ModelConfig:
     supports_thinking: bool = False
 
     @classmethod
-    def from_dict(cls, value: dict[str, Any]) -> "ModelConfig":
+    def from_dict(cls, value: dict[str, Any]) -> ModelConfig:
         name = _require_str(value, "name")
         api_key = _require_str(value, "api_key")
         return cls(
@@ -55,7 +55,7 @@ class ModelSettings:
         cls,
         models: list[ModelConfig],
         roles: dict[str, str],
-    ) -> "ModelSettings":
+    ) -> ModelSettings:
         by_name = {model.name: model for model in models}
         return cls(models=by_name, roles=roles)
 

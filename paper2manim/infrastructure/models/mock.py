@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
 
 from paper2manim.infrastructure.models.message import ModelMessage
 from paper2manim.infrastructure.models.options import ModelCallOptions

@@ -4,7 +4,11 @@ from pathlib import Path
 from typing import Any
 
 from paper2manim.config.settings import VLMConfig
-from paper2manim.infrastructure.vlm.client import BaseVLMHTTPClient, VLMClient, VLMChatMessage, image_to_data_url
+from paper2manim.infrastructure.vlm.client import (
+    BaseVLMHTTPClient,
+    VLMChatMessage,
+    image_to_data_url,
+)
 
 
 class DoubaoVLMClient(BaseVLMHTTPClient):

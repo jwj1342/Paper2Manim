@@ -21,7 +21,6 @@ from paper2manim.parsers.arxiv_source import (
     strip_comments,
 )
 
-
 # ---- parse_arxiv_id ---------------------------------------------------------
 
 @pytest.mark.parametrize(

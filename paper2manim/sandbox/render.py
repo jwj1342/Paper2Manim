@@ -114,12 +114,10 @@ def render(
             env=env,
             check=False,
         )
-        stdout = proc.stdout
         stderr = proc.stderr
         returncode = proc.returncode
     except subprocess.TimeoutExpired as e:
         timed_out = True
-        stdout = e.stdout.decode() if isinstance(e.stdout, bytes) else (e.stdout or "")
         stderr = e.stderr.decode() if isinstance(e.stderr, bytes) else (e.stderr or "")
         stderr = stderr + "\n[TIMEOUT]"
         returncode = -1

@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import logging
-from typing import Any, Literal, Sequence, TypeVar
+from collections.abc import Sequence
+from typing import Literal, TypeVar
 
 from langchain_core.exceptions import OutputParserException
 from langchain_openai import ChatOpenAI

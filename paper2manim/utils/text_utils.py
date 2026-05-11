@@ -4,7 +4,6 @@ import json
 import re
 from typing import Any
 
-
 CODE_FENCE_RE = re.compile(r"```(?:python)?\s*(.*?)```", re.DOTALL | re.IGNORECASE)
 
 

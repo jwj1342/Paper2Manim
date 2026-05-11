@@ -1,6 +1,5 @@
 """Smoke test for llm.get_llm — does NOT call the real MiMo API."""
 
-from unittest.mock import patch
 
 import pytest
 

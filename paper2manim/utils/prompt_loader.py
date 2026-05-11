@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-
 # Top-level repo prompts/ directory (avoids conflict with main's
 # paper2manim/prompts.py module). prompt_loader.py lives at
 # paper2manim/utils/prompt_loader.py, so parents[2] is the repo root.

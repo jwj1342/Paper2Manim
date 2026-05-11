@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from paper2manim.config.model_config import ModelConfig, ModelSettings
+from paper2manim.config.model_config import ModelSettings
 from paper2manim.infrastructure.models.base import BaseModel
 from paper2manim.infrastructure.models.factory import create_model
 

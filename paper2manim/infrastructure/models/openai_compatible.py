@@ -1,16 +1,13 @@
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from typing import Any
 
 from paper2manim.config.model_config import ModelConfig
 from paper2manim.infrastructure.llm.client import (
-    ChatMessage,
     LLMConfig,
     OpenAICompatibleClient,
 )
-from paper2manim.infrastructure.models.base import BaseModel
 from paper2manim.infrastructure.models.message import ModelMessage
 from paper2manim.infrastructure.models.options import ModelCallOptions
 from paper2manim.infrastructure.models.response import ModelResponse

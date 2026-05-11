@@ -94,6 +94,7 @@ def test_render_allows_tex_and_mathtex():
 def test_render_blocks_paragraph():
     """Per issue #1 D1: Paragraph stays blocked (wall-of-text scenes)."""
     import pytest
+
     from paper2manim.quality.manim_static_checker import validate_manim_code
 
     code = (

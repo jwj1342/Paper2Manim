@@ -20,6 +20,7 @@ The collaborator's ``Settings`` (app-level dataclass) is re-exported as
 # the collaborator's ``settings.py`` submodule (re-exported below) would shadow
 # it. Callers wanting the env singleton should do
 # ``from paper2manim.config.env import settings`` or call ``get_settings()``.
+from paper2manim.config.config_loader import load_model_settings
 from paper2manim.config.env import (
     PROJECT_ROOT,
     Settings,
@@ -28,15 +29,18 @@ from paper2manim.config.env import (
 
 # New: YAML-based model registry + role mapping
 from paper2manim.config.model_config import ModelConfig, ModelSettings
-from paper2manim.config.config_loader import load_model_settings
 
 # New: YAML-based application settings (collaborator's)
 from paper2manim.config.settings import (
     ProviderDefaults,
-    Settings as AppSettings,
-    VLMConfig,
     VisualReviewConfig,
+    VLMConfig,
     load_dotenv,
+)
+from paper2manim.config.settings import (
+    Settings as AppSettings,
+)
+from paper2manim.config.settings import (
     load_settings as load_app_settings,
 )
 

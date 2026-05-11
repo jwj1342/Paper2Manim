@@ -44,8 +44,6 @@ def stub_pipeline(monkeypatch):
 
     llm.with_structured_output.side_effect = with_structured_output
 
-    invoke_calls = {"n": 0}
-
     def fake_invoke(messages):
         # storyboarder/summarizer go through with_structured_output;
         # coder & reviewer call llm.invoke directly

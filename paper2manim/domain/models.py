@@ -124,7 +124,7 @@ class PaperArgumentStep:
     why_it_matters: str = ""
 
     @classmethod
-    def from_dict(cls, value: dict[str, Any]) -> "PaperArgumentStep":
+    def from_dict(cls, value: dict[str, Any]) -> PaperArgumentStep:
         return cls(
             role=str(value.get("role") or "").strip(),
             claim=str(value.get("claim") or "").strip(),
@@ -146,7 +146,7 @@ class KeyMechanism:
     visual_potential: str | None = None
 
     @classmethod
-    def from_dict(cls, value: Any) -> "KeyMechanism":
+    def from_dict(cls, value: Any) -> KeyMechanism:
         if isinstance(value, str):
             return cls(name=value.strip(), description=value.strip())
         if not isinstance(value, dict):
@@ -173,7 +173,7 @@ class KeyExperiment:
     source_section: str | None = None
 
     @classmethod
-    def from_dict(cls, value: Any) -> "KeyExperiment":
+    def from_dict(cls, value: Any) -> KeyExperiment:
         if isinstance(value, str):
             return cls(name=value.strip(), purpose=value.strip())
         if not isinstance(value, dict):
@@ -200,7 +200,7 @@ class KeyResult:
     source_section: str | None = None
 
     @classmethod
-    def from_dict(cls, value: Any) -> "KeyResult":
+    def from_dict(cls, value: Any) -> KeyResult:
         if isinstance(value, str):
             return cls(metric="reported_result", value=value.strip(), significance=value.strip())
         if not isinstance(value, dict):
@@ -229,7 +229,7 @@ class VisualCandidate:
     priority: int
 
     @classmethod
-    def from_dict(cls, value: dict[str, Any]) -> "VisualCandidate":
+    def from_dict(cls, value: dict[str, Any]) -> VisualCandidate:
         source_claim = str(
             value.get("source_claim")
             or value.get("claim")
@@ -274,7 +274,7 @@ class GlobalBrief:
     warnings: list[str] = field(default_factory=list)
 
     @classmethod
-    def from_dict(cls, value: dict[str, Any]) -> "GlobalBrief":
+    def from_dict(cls, value: dict[str, Any]) -> GlobalBrief:
         title = _optional_str(value.get("title") or value.get("topic"))
         return cls(
             title=title,
@@ -343,7 +343,7 @@ class NarrativeArc:
     takeaway: str = ""
 
     @classmethod
-    def from_dict(cls, value: dict[str, Any]) -> "NarrativeArc":
+    def from_dict(cls, value: dict[str, Any]) -> NarrativeArc:
         return cls(
             hook=str(value.get("hook") or "").strip(),
             problem=str(value.get("problem") or "").strip(),
@@ -375,7 +375,7 @@ class VideoChapter:
     scene_ids: list[str] = field(default_factory=list)
 
     @classmethod
-    def from_dict(cls, index: int, value: dict[str, Any]) -> "VideoChapter":
+    def from_dict(cls, index: int, value: dict[str, Any]) -> VideoChapter:
         return cls(
             chapter_id=str(value.get("chapter_id") or value.get("id") or f"chapter_{index + 1:02d}").strip(),
             title=str(value.get("title") or f"Chapter {index + 1}").strip(),
@@ -407,7 +407,7 @@ class AnimationBeat:
     on_screen_text: list[str]
 
     @classmethod
-    def from_dict(cls, index: int, value: Any) -> "AnimationBeat":
+    def from_dict(cls, index: int, value: Any) -> AnimationBeat:
         if isinstance(value, str):
             return cls(
                 beat_id=f"beat_{index + 1:02d}",
@@ -469,7 +469,7 @@ class SceneSpec:
     forbidden_patterns: list[str] = field(default_factory=list)
 
     @classmethod
-    def from_dict(cls, index: int, value: dict[str, Any]) -> "SceneSpec":
+    def from_dict(cls, index: int, value: dict[str, Any]) -> SceneSpec:
         scene_id = str(value.get("scene_id") or f"scene_{index + 1:02d}").strip()
         title = str(value.get("title") or f"Scene {index + 1}").strip()
         return cls(
@@ -549,7 +549,7 @@ class PaperVideoPlan:
     plan_warnings: list[str] = field(default_factory=list)
 
     @classmethod
-    def from_dict(cls, value: dict[str, Any]) -> "PaperVideoPlan":
+    def from_dict(cls, value: dict[str, Any]) -> PaperVideoPlan:
         raw_arc = value.get("narrative_arc")
         raw_scenes = value.get("scenes")
         if not isinstance(raw_scenes, list):
@@ -732,7 +732,7 @@ class VisualReviewScores:
     animation_perceived: int
 
     @classmethod
-    def from_dict(cls, value: dict[str, Any]) -> "VisualReviewScores":
+    def from_dict(cls, value: dict[str, Any]) -> VisualReviewScores:
         return cls(
             paper_alignment=_int(value.get("paper_alignment"), 1),
             visual_clarity=_int(value.get("visual_clarity"), 1),
@@ -761,7 +761,7 @@ class VisualIssue:
     suggestion: str
 
     @classmethod
-    def from_dict(cls, value: dict[str, Any]) -> "VisualIssue":
+    def from_dict(cls, value: dict[str, Any]) -> VisualIssue:
         return cls(
             type=str(value.get("type") or "other").strip(),
             severity=str(value.get("severity") or "low").strip(),
@@ -792,7 +792,7 @@ class VisualReviewResult:
     metadata: dict[str, Any] = field(default_factory=dict)
 
     @classmethod
-    def from_dict(cls, value: dict[str, Any]) -> "VisualReviewResult":
+    def from_dict(cls, value: dict[str, Any]) -> VisualReviewResult:
         return cls(
             scene_id=str(value.get("scene_id") or "").strip(),
             attempt=_int(value.get("attempt"), 1),

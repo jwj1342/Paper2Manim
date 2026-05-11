@@ -3,7 +3,6 @@ from __future__ import annotations
 import ast
 import re
 
-
 # Adjusted per issue #1 consensus (D1 + D4):
 # - FORBIDDEN_MODULES: re-allowed `pathlib` and `sys` (the original list was too
 #   strict for legitimate use); still blocking filesystem write/delete +

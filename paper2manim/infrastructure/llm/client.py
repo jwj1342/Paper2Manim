@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import http.client
 import json
-import socket
 import time
 import urllib.error
 import urllib.parse
@@ -116,12 +115,7 @@ class BaseHTTPClient:
                 raise RuntimeError(
                     f"{self.config.provider} API HTTP {exc.code}: {detail}"
                 ) from exc
-            except (
-                http.client.IncompleteRead,
-                TimeoutError,
-                socket.timeout,
-                urllib.error.URLError,
-            ) as exc:
+            except (http.client.IncompleteRead, TimeoutError, urllib.error.URLError) as exc:
                 last_error = str(exc)
                 if not use_no_proxy and urllib.request.getproxies():
                     use_no_proxy = True

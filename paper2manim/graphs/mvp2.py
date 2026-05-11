@@ -17,7 +17,6 @@ from paper2manim.agents.storyboarder import storyboarder_node
 from paper2manim.agents.summarizer import summarizer_node
 from paper2manim.artifacts import (
     append_trace,
-    copy_final_video,
     run_dir,
     save_attempt_result,
 )
