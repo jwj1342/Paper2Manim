@@ -47,54 +47,44 @@ PR 前跑一下能省一次 CI 来回。
 
 ---
 
-## 3. 分支保护规则（**需要手动在 GitHub Settings 启用**）
+## 3. 分支保护（`main`）
 
-GitHub Actions 文件本身只定义"跑什么"，**"不通过不能合"是分支保护规则**，必须在仓库 Settings 里点一次。建议配置：
+> GitHub 自 2023 起主推 **Rulesets** 替代旧的 Branch protection rules，两者功能等价、并存。本仓库目前用经典 Branch protection 实现，未来可平滑迁移到 Rulesets。
 
-**路径**：`Settings → Branches → Branch protection rules → Add rule`
+**当前 `main` 分支已生效的约束**：
 
-**规则名**：`main`
+| 约束 | 作用 |
+|---|---|
+| 必须通过 PR 合入 | 任何人（含 owner）不能 `git push origin main` 直推 |
+| 1 个 approval | PR 必须有一个 approving review |
+| Dismiss stale reviews | 新 commit push 后旧的 approval 失效，需要重新 review |
+| 必须通过的 status checks | `pytest + ruff (py3.11)`、`pytest + ruff (py3.12)`、`Analyze (python)` —— 三个全绿才能 merge |
+| Strict（up-to-date）| PR 分支必须先 rebase / merge main 才能合 |
+| 必须解决所有 review conversation | 未 resolved 的 comment 会阻塞 merge |
+| 禁止 force push | `git push -f` 被拒 |
+| 禁止删除分支 | `main` 不能被删 |
+| 不允许 bypass（含 admin）| owner 自己也得走 PR 流程 |
 
-勾选：
+**触发场景**：
+- `git push origin main` 直推 → `remote rejected`
+- CI 红或 CodeQL 红 → Merge 按钮灰掉
+- 强制 push / 删除 `main` → 被拒
 
-- [x] **Require a pull request before merging**
-  - [x] Require approvals: **1**（个人项目可设 0，但建议至少 1）
-  - [x] Dismiss stale pull request approvals when new commits are pushed
-- [x] **Require status checks to pass before merging**
-  - [x] Require branches to be up to date before merging
-  - 必选 checks（在 PR 跑过一次后这里才会出现选项）：
-    - `pytest + ruff (py3.11)`
-    - `pytest + ruff (py3.12)`
-    - `Analyze (python)` (CodeQL)
-- [x] **Require conversation resolution before merging**
-- [x] **Do not allow bypassing the above settings**（包括 admin，强烈建议）
-- [ ] Require signed commits（可选，HPC 环境配 GPG 签名较麻烦，跳过）
-- [ ] Require linear history（可选；想强制 rebase 合并就开）
-
-**Restrict who can push to matching branches**：勾上并清空允许列表 → 任何人（包括 owner）都必须通过 PR 才能动 `main`。
-
-### 效果
-
-- 直接 `git push origin main`：**被拒绝**（remote rejected）
-- PR 红了：**Merge 按钮灰掉**
-- 强制 push：**被拒绝**
-
-### 紧急绕过
-
-如果真的需要紧急修复（例如 CI 本身坏了导致永远红），有两条路：
-1. 临时在 Settings 把"Do not allow bypassing"取消，merge 后立刻恢复
-2. 在另一个 PR 里修复 CI，让它先合（如果 CI 失败的不是 CI 自己，没救只能走 1）
+**紧急绕过**：极少数情况下（例如 CI workflow 自身坏了导致永远不绿），临时在 Settings 里把 "Do not allow bypassing" 取消，merge 后立刻恢复。
 
 ---
 
-## 4. CodeQL 安全扫描
+## 4. Code security
 
-第一次启用需要在 `Settings → Code security and analysis` 里：
-- 开启 **Code scanning** → 选 "Default" 或 "Advanced"（我们用 advanced，即 workflow 文件版）
+公开仓库 GitHub 默认就开了一批安全功能，无需点：
 
-发现的问题在 **Security tab** 列出，PR 里也会以注释形式提示。
+| 功能 | 状态 | 作用 |
+|---|---|---|
+| Dependency graph | ✅ 默认 | 解析 `pyproject.toml`，构建依赖关系图，供 alerts / CodeQL 用 |
+| Secret scanning + push protection | ✅ 默认（公开仓库） | 检测意外提交的 token / key（如 `tp-...`、AWS key），并在 `git push` 时拦截 |
+| CodeQL code scanning | ✅ 通过 `.github/workflows/codeql.yml` | 静态分析 Python 代码的安全漏洞（注入、不安全反序列化等） |
 
-误报很常见，可以在 dismiss 时选原因（"False positive" / "Used in tests" 等），dismiss 会被记住。
+发现的问题在 **Security** tab 列出，PR 里以注释形式提示。误报可 dismiss 并选原因，会被记住。
 
 ---
 
@@ -159,12 +149,31 @@ gh pr create --fill   # 或在 GitHub UI 上开
 
 ---
 
-## 9. 一次性手动配置 checklist
+## 9. 当前状态与待办
 
-第一次设置仓库时按顺序点：
+### 已生效
 
-- [ ] `Settings → Code security and analysis` → 开 Dependabot alerts / Dependabot security updates / Code scanning
-- [ ] 第一次 push 触发 CI 跑一遍，让 `pytest + ruff (py3.11)` 等 check 名字出现
-- [ ] `Settings → Branches → Add branch protection rule` for `main`（见第 3 节）
-- [ ] `Settings → Actions → General` → "Workflow permissions" 设为 "Read repository contents and packages permissions"（最小权限原则）
-- [ ] （可选）`Settings → Pull Requests` → 关掉 "Allow merge commits"，只保留 Squash，强制 linear history
+| 项 | 在哪 | 作用 |
+|---|---|---|
+| CI workflow | `.github/workflows/ci.yml` | push / PR 时跑 ruff + 46 个 mock 测试，py3.11/3.12 双 matrix |
+| CodeQL workflow | `.github/workflows/codeql.yml` | push / PR + 每周一基线扫描 Python 安全漏洞 |
+| Dependabot config | `.github/dependabot.yml` | 周更 pip / 月更 actions，分组 PR |
+| Branch protection (main) | Settings → Branches | 见第 3 节：必须 PR + 3 个 check 全绿 + 1 approval + 不允许 bypass |
+| Workflow 默认权限 | Settings → Actions → General | 只读，且禁止 workflow 自动 approve PR |
+| Dependency graph + Secret scanning + push protection | Settings → Code security（公开仓库默认） | 见第 4 节 |
+
+### 还没开（建议补上）
+
+| 项 | 在哪 | 为什么要开 |
+|---|---|---|
+| **Dependabot alerts** | Settings → Code security → Dependabot alerts → Enable | 没开的话依赖里有 CVE 你也不会知道；这是 Dependabot 安全更新的前提 |
+| **Dependabot security updates** | 同上 → Dependabot security updates → Enable | CVE 出现时自动开 PR 升级，**不受**每周 5 个 PR 上限的限制 |
+| **合并策略收紧** | Settings → General → Pull Requests | 现状是 merge commit / squash / rebase 全允许；建议**只留 Squash**，并勾上 "Automatically delete head branches"，强制 main 线性历史 |
+
+### 不影响功能但可选
+
+| 项 | 说明 |
+|---|---|
+| 迁移到 Rulesets | 把现有 Branch protection 换成新版 Ruleset。功能等价，多出"叠加 / dry-run / 管 tag"等能力。当前没必要，等需要管 tag 或多分支策略时再迁 |
+| Required linear history | 如果第二条待办（只留 squash）做了，这个就自动满足；如果想保留 rebase 也允许，可单独开启这条 |
+| 私有仓库的 Secret scanning | 当前是公开仓库自动开；如果将来转私有，需要 GitHub Advanced Security（付费） |
