@@ -1,6 +1,6 @@
 # Progress
 
-> 更新时间：2026-05-11（合入合作者 fix 分支：static checker + 多 provider 抽象 + VLM 脚手架）
+> 更新时间：2026-05-11（合入合作者 fix 分支 → arXiv 源码解析路径 → GitHub CI/CD + 分支保护）
 
 ## 总览
 
@@ -15,7 +15,10 @@
 | Graphs（mvp1, mvp2） | 完成 | mvp2 含 should_retry / has_more_scenes 两个 conditional edges |
 | Prompts（8 个） | 完成 | 外置在 `prompts/*.md`，含 global_system 共享头 |
 | 多 provider 抽象（infrastructure/models, llm, vlm） | 合入待整合 | 与 main 的 `llm.py` 并存；后续在 D3 决议后统一 |
-| 测试 | 完成 | 28/28 单测；slow 标记的真实渲染冒烟测已规划 |
+| 测试 | 完成 | 46/46 单测；slow 标记的真实渲染冒烟测已规划 |
+| 输入解析（arXiv 源码 + 本地 PDF 兜底） | 完成 | `parsers/arxiv_source.py` + 分派 `parsers/__init__.py`；18 条新单测；SourceUnavailable 自动回退 Marker |
+| CI/CD（GitHub Actions） | 完成 | `.github/workflows/ci.yml`（pytest + ruff, py3.11/3.12 matrix）+ `codeql.yml`（每周 + 每次 PR） |
+| 分支保护 + Dependabot | 完成 | main 强制 PR + 3 个 check 必过 + 禁 force push；Dependabot 周更 pip / 月更 actions |
 | 端到端验收（MVP 1.0） | 完成 | pythagorean 输入 → 10.47s mp4 |
 | 端到端验收（MVP 2.0） | 进行中 | 反思 cycle 单测已通过；待真实论文跑通 |
 
@@ -76,7 +79,7 @@
 - `tests/test_coder.py`（fence 抽取、no-fence 兜底、error_feedback 回灌进 prompt）
 - `tests/test_graph_mvp1.py`（端到端 mock 跑通；render 成功 / skip 两条路径）
 - `tests/test_graph_mvp2.py`（**反思闭环关键**：两次 latex error 后第三次成功；max_retries=1 give_up 回归）
-- 当前结果：**25/25 通过**（含 3 条 CRITICAL fix 回归测试）
+- 当前结果：**46/46 通过**（含 3 条 CRITICAL fix 回归 + 18 条 arXiv parser 单测）
 
 ### 端到端验收
 - **MVP 1.0** 真实跑通：`examples/mvp1/pythagorean.txt` → `runs/20260510-080654-3a1159/final/output.mp4`，时长 10.47s，854×480@15fps，h264，87.7 KB
@@ -88,6 +91,8 @@
 - `docs/getting-started.md` — 详细入门（含 §5 常见问题与排查）
 - `docs/progress.md` — 本文件
 - `docs/ResearchProposal.md` — 研究提案
+- `docs/graphs.md` + `docs/graphs/{mvp1,mvp2}.mmd` — LangGraph 拓扑可视化（Mermaid 源码 + GitHub 自动渲染）
+- `docs/repo-automation.md` — CI/CD、分支保护、Code security、Dependabot、协作流程的状态参考
 
 ### 工程脚手架（HPC 友好但非必需）
 - `scripts/setup_env.sh`、`install_tinytex.sh`、`render_node.sh`、`smoke_test.sh`
@@ -116,6 +121,21 @@
 3. **D2 / D5 脚手架 — VLM 视觉评审**（commit `519308f`）：`paper2manim/infrastructure/vlm/`（VLMClient Protocol + Doubao/豆包 实现 + Mock + factory）、`paper2manim/agents/vlm_scene_reviewer.py`、`paper2manim/agents/visual_revision_agent.py`、`paper2manim/domain/models.py`（1005 行领域模型：SceneSpec / PaperVideoPlan / VisualReviewResult 等）、`paper2manim/utils/{prompt_loader,text_utils}.py`、新增 `prompts/{global_system,vlm_scene_reviewer,visual_revision_agent}.md`。**未接入 graphs/mvp2.py**，待 issue #1 的 D2 / D5 讨论收敛后再决定整合策略。
 
 整合后回归：`pytest` **28/28 通过**；`paper2manim.{config.env,config,llm,state,graphs.mvp1,graphs.mvp2,sandbox.render,quality.manim_static_checker,utils.prompt_loader}` 全部 import 通过；`prompt_loader.PROMPT_DIR` 正确指向 repo-root `prompts/`（合并时调整为 `parents[2]`，避开与 `paper2manim/prompts.py` 模块同名）。
+
+### arXiv 源码解析路径（方案 C）
+
+`paper2manim/parsers/arxiv_source.py`：抓 `arxiv.org/e-print/<id>` 返回的 tarball / single-gz / gzipped-PDF 三种 blob 形态；递归展开 `\input{}` / `\include{}`（max_depth=6）；去注释保留 `\%`；按 `\section{...}` 大小写不敏感子串截单节。`paper2manim/parsers/__init__.py` 暴露 `parse_arxiv()` / `parse_local_pdf()` 分派器，arXiv 抓不到源码（`SourceUnavailable`）时自动回退 Marker 解析 PDF。CLI 加 `--arxiv <id|url>` / `--section <name>`；state 增 `input_kind="arxiv"` + `arxiv_spec` / `arxiv_section` / `parsed_format` / `parser_source`；summarizer prompt 增加 LaTeX 输入分支提示（让模型忽略 `\label / \ref / \cite / preamble`）。`graphs/mvp2.py` 的 `parser_node` 改为分派 + 把任何下载异常吞成 `fatal_error`，由 `_is_fatal` 早退到 END。新增 18 条单测覆盖 id 解析（7 种变体含 `hep-th/9901001`）、flatten、截节、tarball 解压。`docs/graphs.md` + `docs/graphs/{mvp1,mvp2}.mmd` 落 LangGraph 拓扑可视化。
+
+### GitHub CI/CD + 分支保护
+
+三个 workflow + Dependabot + 分支保护一次落到位：
+
+- `.github/workflows/ci.yml`：push / PR 时跑 ruff + pytest（`-m "not slow"`），py3.11/3.12 双 matrix；concurrency cancel；apt 装 `libcairo2-dev libpango1.0-dev pkg-config ffmpeg`（manimpango 需要 pangocairo C 扩展）；注入 `MIMO_API_KEY=tp-fake-ci-key` 防止 CI 误调真 API
+- `.github/workflows/codeql.yml`：Python 静态安全扫描，push / PR + 每周一基线
+- `.github/dependabot.yml`：周更 pip / 月更 actions；langchain* 与 dev-tools 分组合并 PR；目前已成功跑通 3 个 actions 升级 PR（checkout 4→6 / setup-python 5→6 / codeql-action 3→4）
+- Classic Branch protection on `main`：必须 PR + 3 个 status check（`pytest + ruff (py3.11)` / `(py3.12)` / `Analyze (python)`）全绿 + strict（up-to-date）+ dismiss stale + 必须解决所有 review conversation + 禁 force push + 禁删除分支
+- Code security（公开仓库自动 / 手动开）：Dependency graph、Secret scanning + Push protection、Dependabot alerts、Dependabot security updates、Grouped security updates、Private vulnerability reporting、Copilot Autofix 全开
+- 文档：`docs/repo-automation.md` 把上述配置以"已设了什么 + 作用 + 还差什么"的形式记录下来；ruff 顺手在合并代码库上修了 42 个旧 lint 问题（F401 / I001 / UP037 等）
 
 ---
 
@@ -177,7 +197,7 @@
 - [ ] Pydantic UserWarning（`PydanticSerializationUnexpectedValue` from langchain-openai `with_structured_output`）— 无害但烦人
 - [ ] mypy strict 跑通
 - [ ] 单测覆盖率 → 80%（当前未量化，估计 60–70%）
-- [ ] CI（GitHub Actions / GitLab CI）：lint + fast tests on PR
+- [x] CI（GitHub Actions）：lint + fast tests on PR（见 `.github/workflows/ci.yml`、`docs/repo-automation.md`）
 - [ ] CONTRIBUTING.md / CHANGELOG.md
 
 ---

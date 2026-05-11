@@ -210,10 +210,18 @@ Paper2Manim/
 ├── .env.example               ← 环境变量模板（复制为 .env 后填 MIMO_API_KEY）
 ├── .gitignore                 ← 屏蔽 .venv / runs / media / .env / MiMo-API.txt
 │
+├── .github/                  ← GitHub 自动化配置
+│   ├── workflows/ci.yml         pytest + ruff，push / PR 触发，py3.11/3.12
+│   ├── workflows/codeql.yml     Python 安全扫描，PR + 每周基线
+│   └── dependabot.yml           依赖自动升级（pip 周更，actions 月更）
+│
 ├── docs/                      ← 项目文档
 │   ├── ResearchProposal.md      研究提案原文（中文，研究背景与三大贡献）
 │   ├── getting-started.md       面向新协作者的非 HPC 入门指南（含常见问题）
-│   └── progress.md              当前进度 + To Do + 已知问题 + 验收基线
+│   ├── progress.md              当前进度 + To Do + 已知问题 + 验收基线
+│   ├── graphs.md                LangGraph 拓扑可视化（Mermaid，GitHub 自动渲染）
+│   ├── graphs/                  原始 .mmd 文件
+│   └── repo-automation.md       CI/CD、分支保护、Code security、协作流程参考
 │
 ├── paper2manim/               ← 主 Python 包（pip install -e . 后可 import）
 │   ├── __init__.py
@@ -290,14 +298,15 @@ Paper2Manim/
 │
 ├── config.example.yaml        ← AppSettings YAML 模板（多 provider 模型注册表）
 │
-├── tests/                     ← pytest 测试套件（28/28 通过）
+├── tests/                     ← pytest 测试套件（46/46 通过）
 │   ├── conftest.py              共享 fixtures（隔离 runs 目录、mock LLM）
 │   ├── test_classify.py         错误分类用例 + 静态检查器集成（D1/D4）
 │   ├── test_llm_client.py       MiMo client 边界条件（key 缺失、未知 alias）
 │   ├── test_storyboarder.py     mock LLM 验证结构化输出
 │   ├── test_coder.py            python 块抽取、error_feedback 回灌进 prompt
 │   ├── test_graph_mvp1.py       端到端 mock：含 / 不含 render 两条路径
-│   └── test_graph_mvp2.py       反思闭环：两次失败后第三次成功 + max_retries give_up
+│   ├── test_graph_mvp2.py       反思闭环：两次失败后第三次成功 + max_retries give_up
+│   └── test_arxiv_source.py     id 变体解析 / flatten / 截节 / tarball 解压（18 用例）
 │
 ├── examples/                  ← 输入样例
 │   ├── mvp1/                    5 个固定短文本 demo（pythagorean / fourier / euler / newton / linear-regression）
@@ -333,6 +342,8 @@ Paper2Manim/
 | 改沙盒资源限制 / 错误分类 | `paper2manim/sandbox/render.py` 与 `classify.py` |
 | 知道当前进度 / 待办 | [`docs/progress.md`](./docs/progress.md) |
 | 看研究背景 | [`docs/ResearchProposal.md`](./docs/ResearchProposal.md) |
+| 看 graph 拓扑图 | [`docs/graphs.md`](./docs/graphs.md) |
+| 了解 CI / 分支保护 / PR 流程 | [`docs/repo-automation.md`](./docs/repo-automation.md) |
 | 排查一次失败的运行 | `runs/<run_id>/storyboard.json` → `attempts/*.py` → `attempts/*.render.json` → `trace.jsonl` |
 
 ## 与协作者的工作约定
@@ -341,6 +352,7 @@ Paper2Manim/
 - 改 prompt 不必改代码：`prompts/*.md` 是热加载的，diff 友好。
 - 加新 agent 时遵循已有 pattern：`agents/<name>.py` 写一个 `xxx_node(state) -> dict` 函数；在 `graphs/mvpN.py` 里挂到 `StateGraph` 上；把它对外的输入输出字段加到 `state.py` 的 `PaperState`。
 - 跑一次复杂 PDF 之前先用 `--no-render` 验证 LLM 端的产物（节省渲染开销）。
+- **`main` 受分支保护**：不能直推，必须开 PR，CI（`pytest + ruff` py3.11/3.12 + CodeQL）三个 check 必过才能合。详细说明见 [`docs/repo-automation.md`](./docs/repo-automation.md)。
 
 ## 参考与致谢
 
