@@ -10,6 +10,7 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
+from paper2manim.quality.manim_static_checker import validate_manim_code
 from paper2manim.sandbox.classify import (
     classify_error,
     excerpt_source,
@@ -43,6 +44,27 @@ def render(
 
     work = Path(workdir) if workdir else Path(tempfile.mkdtemp(prefix="manim_"))
     work.mkdir(parents=True, exist_ok=True)
+
+    # Pre-flight static check (issue #1 D4): AST blacklist + structural validation.
+    # If the LLM produced obviously dangerous or malformed Manim code, fail fast
+    # without spinning up a subprocess.
+    try:
+        validate_manim_code(code)
+    except (ValueError, SyntaxError) as exc:
+        return {
+            "status": "error",
+            "category": "python",
+            "exit_code": -1,
+            "scene": scene_name,
+            "video_path": None,
+            "error_type": "StaticCheckError",
+            "error_message": f"static check failed: {exc}",
+            "traceback_tail": str(exc),
+            "source_excerpt": None,
+            "tex_log_excerpt": None,
+            "workdir": str(work),
+        }
+
     script = work / "scene.py"
     script.write_text(code, encoding="utf-8")
     out_dir = work / "out"

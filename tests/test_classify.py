@@ -53,3 +53,56 @@ def test_excerpt_source_window():
 def test_first_error_line_picks_python_exception():
     err = "Traceback (most recent call last):\n  ...\nNameError: name 'foo' is not defined"
     assert first_error_line(err) == "NameError: name 'foo' is not defined"
+
+
+# ---- Static checker integration (issue #1 D4) ----
+
+def test_render_blocks_forbidden_import():
+    """Pre-flight static check rejects code that imports `os`."""
+    from paper2manim.sandbox.render import render
+
+    bad = (
+        "from manim import *\n"
+        "import os\n"
+        "class S(Scene):\n"
+        "    def construct(self):\n"
+        "        os.system('rm -rf /')\n"
+        "        self.play(Create(Circle()))\n"
+        "        self.play(FadeOut(Circle()))\n"
+    )
+    result = render(bad, "S")
+    assert result["status"] == "error"
+    assert result["error_type"] == "StaticCheckError"
+    assert "static check" in (result["error_message"] or "").lower()
+
+
+def test_render_allows_tex_and_mathtex():
+    """Per issue #1 D1: Tex / MathTex must NOT be blocked."""
+    from paper2manim.quality.manim_static_checker import validate_manim_code
+
+    code = (
+        "from manim import *\n"
+        "class S(Scene):\n"
+        "    def construct(self):\n"
+        "        eq = MathTex(r'a^2 + b^2 = c^2')\n"
+        "        self.play(Write(eq))\n"
+        "        self.play(FadeOut(eq))\n"
+    )
+    validate_manim_code(code)  # should not raise
+
+
+def test_render_blocks_paragraph():
+    """Per issue #1 D1: Paragraph stays blocked (wall-of-text scenes)."""
+    import pytest
+    from paper2manim.quality.manim_static_checker import validate_manim_code
+
+    code = (
+        "from manim import *\n"
+        "class S(Scene):\n"
+        "    def construct(self):\n"
+        "        p = Paragraph('line1', 'line2')\n"
+        "        self.play(Write(p))\n"
+        "        self.play(FadeOut(p))\n"
+    )
+    with pytest.raises(ValueError, match="Paragraph"):
+        validate_manim_code(code)
