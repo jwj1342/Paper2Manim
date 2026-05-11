@@ -2,23 +2,7 @@
 
 > 探索"学术论文 → 高质量动画讲解视频"的端到端自动化路径。
 
-## 研究背景
-
-科学研究的产出正在指数级增长，但学术论文密集的文本与复杂的数学公式构成了显著的知识传播壁垒。视频——尤其是程序化绘制的动画讲解——已被证明是降低认知负荷、普及复杂概念的最有效媒介之一。然而，高质量学术动画的制作（如使用 [Manim](https://www.manim.community/) 库）门槛极高：创作者既要深入理解论文的硬核内容，又要具备剧本重构能力，最后还要写出复杂的程序化动画代码。
-
-近年来大语言模型（LLM）在长文本理解、逻辑推理与代码生成上的突破，让"用 AI 自动接管这条创作流水线"从想象变为可能。本项目希望系统性地填补**硬核学术文本** ↔ **程序化视觉代码**之间的鸿沟，把过去只有少数极客愿意手工完成的事，变成一条可被研究、被评估、被改进的科研管线。
-
-## 核心研究问题
-
-> 如何构建一个具备自我纠错能力的自主多智能体系统，把冗长复杂的多模态学术论文，自动转化为逻辑连贯、视觉准确、代码可执行的 Manim 动画视频？
-
-围绕这一问题，我们追求三个层面的研究贡献：
-
-1. **解耦的多智能体协同流水线**——把"读论文"、"写剧本"、"写代码"分别交给职责清晰的智能体（Parser → Summarizer → Storyboarder → Coder），用显式的 `StateGraph` 控制信息流转，避免单一长上下文 prompt 带来的逻辑断裂。
-2. **沙盒执行 + 反思纠错的闭环**——Manim 代码的失败远不止语法错误，还包括 LaTeX 编译失败、对象遮挡、坐标越界等"视觉逻辑错误"。我们引入 **Reviewer 智能体**：它在沙盒中真实运行 Coder 生成的代码，把 traceback、LaTeX 日志、源码摘录结构化后回灌给 Coder 迭代修复。希望显著提升一次性成功率（Pass@1）。
-3. **跨学科 Paper-to-Video 评估基准**——定义一套全新的指标体系（内容保真度 / 视觉连贯性 / 代码可执行性），并开源含数学、CS、物理多学科的"论文 ↔ 分镜 ↔ 高质量 Manim 代码"对齐数据集，为后续工作提供可比基线。
-
-研究提案的完整版本见 [`docs/ResearchProposal.md`](./docs/ResearchProposal.md)。
+本仓库是一项以"程序化教学动画生成 Agent 如何**摆脱失忆、持续进化**"为研究问题的代码实现。完整研究动机、四阶段进化框架与 Research Questions 见 **[`docs/ResearchProposal.md`](./docs/ResearchProposal.md)**。
 
 ## 路线图
 
@@ -26,7 +10,7 @@
 |---|---|---|---|---|---|
 | **MVP 1.0** | 已验证 | 短文本（摘要 / 单定理） | Storyboarder → Coder → Render | 15–30 秒视频 | 验证最短端到端链路可行 |
 | **MVP 2.0** | 进行中 | 完整 PDF | Parser(Marker) → Summarizer → Storyboarder → Coder ⇄ Reviewer 反思闭环 → Concat | 1–2 分钟多场景视频 | 反思机制对 Pass@1 的提升 |
-| MVP 3.0 | 计划中 | PDF + 用户风格 | + VLM Critic + 图表抽取 + TTS 音画同步 | 3–5 分钟带配音视频 | 视觉感知与多模态融合 |
+| MVP 3.0 | 计划中 | 教学任务 + 检索到的历史经验 | + VLM-as-Judge 视觉打分 + Episodic Memory Bank 沉淀 + RAG 冷启动 | 持续进化的多场景视频 | **自进化机制 + 跨域记忆迁移**（详见提案 §4） |
 
 **当前状态**：MVP 1.0 端到端已验证（LLM 生成代码 + 沙盒渲染均成功）。MVP 2.0 的全部 agents、graph 拓扑、反思 conditional edge 已实现并通过单测，待真实论文跑通验收。MVP 3.0 的 VLM Critic 与 visual revision 智能体脚手架已合入（见 `paper2manim/infrastructure/vlm/` 与 `paper2manim/agents/vlm_scene_reviewer.py`），尚未接入 `graphs/mvp2.py`，留待 issue #1 的 D2 / D5 讨论收敛后落地。详细进度与 To Do 清单见 [`docs/progress.md`](./docs/progress.md)。
 
@@ -216,7 +200,7 @@ Paper2Manim/
 │   └── dependabot.yml           依赖自动升级（pip 周更，actions 月更）
 │
 ├── docs/                      ← 项目文档
-│   ├── ResearchProposal.md      研究提案原文（中文，研究背景与三大贡献）
+│   ├── ResearchProposal.md      研究提案：失忆 Agent → VLM-as-Judge + 情景记忆库 + 进化曲线
 │   ├── getting-started.md       面向新协作者的非 HPC 入门指南（含常见问题）
 │   ├── progress.md              当前进度 + To Do + 已知问题 + 验收基线
 │   ├── graphs.md                LangGraph 拓扑可视化（Mermaid，GitHub 自动渲染）
