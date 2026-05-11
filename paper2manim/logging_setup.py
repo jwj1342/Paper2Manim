@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import os
 
-from paper2manim.config import settings
+from paper2manim.config.env import settings
 
 
 def setup_logging(level: int = logging.INFO) -> None:

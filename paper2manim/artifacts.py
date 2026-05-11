@@ -8,7 +8,7 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-from paper2manim.config import settings
+from paper2manim.config.env import settings
 
 
 def new_run_id() -> str:

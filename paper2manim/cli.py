@@ -13,7 +13,7 @@ from rich.console import Console
 from rich.table import Table
 
 from paper2manim.artifacts import new_run_id, run_dir, save_input
-from paper2manim.config import settings
+from paper2manim.config.env import settings
 from paper2manim.logging_setup import setup_logging
 from paper2manim.parsers.text import load_text
 from paper2manim.state import PaperState

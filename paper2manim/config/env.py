@@ -8,7 +8,9 @@ from pathlib import Path
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
+# env.py lives inside the ``config/`` package, so the repository root is three
+# levels up: .../Paper2Manim/paper2manim/config/env.py -> .../Paper2Manim
+PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 
 
 class Settings(BaseSettings):

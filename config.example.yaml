@@ -1,0 +1,72 @@
+# Paper2Manim multi-provider model registry
+# -----------------------------------------------------------------------------
+# Copy this file to `config.yaml` (gitignored) and fill in your API keys.
+# Keys can be inlined (e.g. `api_key: sk-...`) or reference environment
+# variables with `$VAR_NAME`, which will be resolved at load time.
+#
+# Adopted from collaborator's fix/api-client-config branch (issue #1, D3).
+# -----------------------------------------------------------------------------
+
+models:
+  # MiMo (Xiaomi Token Plan) — OpenAI-compatible, text-only.
+  # Used as the default for storyboarder / coder / reviewer in main.
+  - name: mimo-v2.5
+    display_name: MiMo V2.5
+    provider: openai_compatible
+    model: mimo-v2.5
+    api_key: $MIMO_API_KEY
+    base_url: https://token-plan-cn.xiaomimimo.com/v1
+    temperature: 0.2
+    max_tokens: 8192
+    timeout: 120
+    supports_vision: false
+    supports_thinking: false
+
+  - name: mimo-v2.5-pro
+    display_name: MiMo V2.5 Pro
+    provider: openai_compatible
+    model: mimo-v2.5-pro
+    api_key: $MIMO_API_KEY
+    base_url: https://token-plan-cn.xiaomimimo.com/v1
+    temperature: 0.2
+    max_tokens: 8192
+    timeout: 120
+    supports_vision: false
+    supports_thinking: false
+
+  # DeepSeek V4 Pro — OpenAI-compatible, with reasoning support.
+  - name: deepseek-v4-pro
+    display_name: DeepSeek V4 Pro
+    provider: openai_compatible
+    model: deepseek-v4-pro
+    api_key: $DEEPSEEK_API_KEY
+    base_url: https://api.deepseek.com/v1
+    temperature: 0.2
+    max_tokens: 8192
+    timeout: 600
+    supports_vision: false
+    supports_thinking: true
+
+  # Vision-capable model (placeholder) — used for VLM scene review (MVP 3.0).
+  # Configure to your preferred vision model and provider.
+  - name: vision-model
+    display_name: Vision Checker
+    provider: openai_compatible
+    model: your-vision-model-name
+    api_key: $VISION_API_KEY
+    base_url: https://example.com/v1
+    temperature: 0.0
+    max_tokens: 4096
+    timeout: 600
+    supports_vision: true
+    supports_thinking: false
+
+# Role-to-model mapping. Each role names which model to use.
+model_roles:
+  global_reader: mimo-v2.5-pro
+  scene_planner: mimo-v2.5
+  scene_coder: mimo-v2.5
+  render_fixer: mimo-v2.5
+  visual_reviser: mimo-v2.5
+  vision_checker: vision-model
+  final_summarizer: mimo-v2.5-pro

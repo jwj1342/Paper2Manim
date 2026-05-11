@@ -1,6 +1,7 @@
 # Secrets
 .env
 MiMo-API.txt
+config.yaml
 
 # Python
 __pycache__/
