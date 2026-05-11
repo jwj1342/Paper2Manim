@@ -32,3 +32,28 @@ def test_storyboarder_fatal_when_no_input(mock_llm):
     state = {"run_id": "test-run", "attempts": []}
     out = storyboarder_node(state)
     assert "fatal_error" in out
+
+
+def test_storyboarder_fatal_on_validation_error(monkeypatch):
+    """C3 regression: structured-output failure must surface as fatal_error,
+    not raise through the graph."""
+    from pydantic import ValidationError
+
+    def fake_safe_invoke(*args, **kwargs):
+        # Simulate the model returning a JSON that fails StoryboardModel validation
+        try:
+            StoryboardModel.model_validate({"title": "x"})  # missing 'scenes'
+        except ValidationError as e:
+            raise e
+        raise AssertionError("expected ValidationError")
+
+    monkeypatch.setattr(
+        "paper2manim.agents.storyboarder.safe_structured_invoke", fake_safe_invoke
+    )
+    monkeypatch.setattr("paper2manim.agents.storyboarder.get_llm", lambda *a, **kw: object())
+
+    state = {"run_id": "test-run", "raw_text": "Pythagorean theorem", "attempts": []}
+    out = storyboarder_node(state)
+    assert "fatal_error" in out
+    assert "storyboarder" in out["fatal_error"]
+    assert "ValidationError" in out["fatal_error"]

@@ -50,6 +50,8 @@ def _print_summary(state: PaperState) -> None:
     table.add_row("scenes", str(len(sb.get("scenes", []))))
     table.add_row("attempts", str(len(state.get("attempts", []))))
     table.add_row("rendered_videos", str(len(state.get("rendered_videos", []))))
+    skipped = state.get("skipped_scenes") or []
+    table.add_row("skipped_scenes", ", ".join(skipped) if skipped else "-")
     table.add_row("final_video_path", state.get("final_video_path") or "-")
     table.add_row("fatal_error", state.get("fatal_error") or "-")
     console.print(table)
@@ -130,6 +132,7 @@ def mvp2(
         "pdf_path": str(Path(pdf_path).resolve()),
         "attempts": [],
         "rendered_videos": [],
+        "skipped_scenes": [],
         "current_scene_idx": 0,
         "iter_count": 0,
         "max_retries": max_retries or settings.PAPER2MANIM_MAX_RETRIES,

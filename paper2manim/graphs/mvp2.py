@@ -41,7 +41,12 @@ def parser_node(state: PaperState) -> dict[str, Any]:
 
 
 def init_scene_node(state: PaperState) -> dict[str, Any]:
-    """Reset per-scene fields when starting a new scene."""
+    """Reset per-scene fields when starting a new scene.
+
+    Does NOT touch ``fatal_error`` — that field is reserved for graph-level
+    fatal errors that must propagate to END. Per-scene give_ups are recorded
+    via ``skipped_scenes`` (populated by ``advance_scene_node``).
+    """
     sb = state.get("storyboard")
     if not sb:
         return {"fatal_error": "init_scene: storyboard missing"}
@@ -52,14 +57,22 @@ def init_scene_node(state: PaperState) -> dict[str, Any]:
         len(sb["scenes"]),
         sb["scenes"][idx]["name"] if idx < len(sb["scenes"]) else "<oob>",
     )
-    return {"iter_count": 0, "error_feedback": None, "current_code": None, "fatal_error": None}
+    return {"iter_count": 0, "error_feedback": None, "current_code": None}
 
 
 def render_node(state: PaperState) -> dict[str, Any]:
-    if state.get("skip_render"):
+    # Defensive guards: graph may reach here with missing state if fatal_error
+    # propagation hasn't kicked in yet, or if a prior node set an inconsistent state.
+    if state.get("skip_render") or state.get("fatal_error"):
         return {}
-    sb = state["storyboard"]
-    idx = state["current_scene_idx"]
+    sb = state.get("storyboard")
+    if not sb or "scenes" not in sb:
+        return {"fatal_error": "render: storyboard missing or malformed"}
+    idx = state.get("current_scene_idx", 0)
+    if idx >= len(sb["scenes"]):
+        return {"fatal_error": f"render: scene_idx {idx} out of range (n_scenes={len(sb['scenes'])})"}
+    if not state.get("current_code"):
+        return {"fatal_error": "render: current_code is empty"}
     scene = sb["scenes"][idx]
     iter_idx = state.get("iter_count", 0)
 
@@ -89,18 +102,27 @@ def render_node(state: PaperState) -> dict[str, Any]:
 
 
 def advance_scene_node(state: PaperState) -> dict[str, Any]:
-    """If last scene succeeded, append its mp4 to rendered_videos. Then bump scene index."""
+    """If last scene succeeded, append its mp4 to ``rendered_videos``; otherwise
+    record the scene name in ``skipped_scenes``. Then bump scene index.
+
+    Does NOT touch ``fatal_error`` — see ``init_scene_node`` docstring.
+    """
     attempts = state.get("attempts", [])
     out: dict[str, Any] = {"current_scene_idx": state.get("current_scene_idx", 0) + 1}
     if attempts:
         last = attempts[-1]
         rr = last.get("render_result", {})
+        scene_name = rr.get("scene", "<unknown>")
         if rr.get("status") == "success" and rr.get("video_path"):
             out["rendered_videos"] = [rr["video_path"]]
-            log.info("[advance] scene %s OK -> %s", rr["scene"], rr["video_path"])
+            log.info("[advance] scene %s OK -> %s", scene_name, rr["video_path"])
         else:
-            log.warning("[advance] scene %s gave up after %d attempt(s)", rr.get("scene"), len(attempts))
-    out["fatal_error"] = None  # reset; one bad scene shouldn't kill the whole run
+            out["skipped_scenes"] = [scene_name]
+            log.warning(
+                "[advance] scene %s gave up after %d attempt(s); recorded in skipped_scenes",
+                scene_name,
+                len(attempts),
+            )
     return out
 
 
@@ -119,9 +141,21 @@ def concat_node(state: PaperState) -> dict[str, Any]:
 # ---- Conditional edges ----
 
 
+def _is_fatal(next_node: str):
+    """Build a conditional edge that routes to END when fatal_error is set,
+    otherwise to ``next_node``."""
+
+    def predicate(state: PaperState) -> Literal["END", "next"]:
+        return "END" if state.get("fatal_error") else "next"
+
+    return predicate, {"END": END, "next": next_node}
+
+
 def should_retry(state: PaperState) -> Literal["coder", "advance"]:
     """After reviewer: retry coder vs. advance to next scene."""
     if state.get("fatal_error"):
+        # A fatal error from a downstream guard (e.g., render_node missing inputs)
+        # is treated like a give_up for the current scene; advance will skip it.
         return "advance"
     attempts = state.get("attempts", [])
     if not attempts:
@@ -157,9 +191,17 @@ def build_mvp2_graph():
     g.add_node("concat", concat_node)
 
     g.set_entry_point("parser")
-    g.add_edge("parser", "summarizer")
-    g.add_edge("summarizer", "storyboarder")
-    g.add_edge("storyboarder", "init_scene")
+
+    # Upstream stages: any fatal_error short-circuits to END instead of
+    # cascading into per-scene nodes that can't recover.
+    for src, dst in [
+        ("parser", "summarizer"),
+        ("summarizer", "storyboarder"),
+        ("storyboarder", "init_scene"),
+    ]:
+        pred, mapping = _is_fatal(dst)
+        g.add_conditional_edges(src, pred, mapping)
+
     g.add_edge("init_scene", "coder")
     g.add_edge("coder", "render")
     g.add_edge("render", "reviewer")

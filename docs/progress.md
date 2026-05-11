@@ -1,19 +1,19 @@
 # Progress
 
-> 更新时间：2026-05-10
+> 更新时间：2026-05-10（含初次代码 review 后的 3 个 CRITICAL 修复）
 
 ## 总览
 
 | 模块 | 状态 | 备注 |
 |---|---|---|
 | 项目骨架 | 完成 | pyproject / .env / .gitignore / README / docs |
-| 核心模块（state/llm/config/prompts/artifacts/cli） | 完成 | 22/22 单测通过 |
+| 核心模块（state/llm/config/prompts/artifacts/cli） | 完成 | 25/25 单测通过 |
 | Sandbox（render/classify/concat） | 完成 | subprocess + rlimit；分类器覆盖 4 大类错误 |
 | MVP 1.0 agents（storyboarder, coder） | 完成 | 端到端验证通过 |
 | MVP 2.0 agents（summarizer, reviewer） | 完成 | 单测通过；待真实 PDF 验收 |
 | Graphs（mvp1, mvp2） | 完成 | mvp2 含 should_retry / has_more_scenes 两个 conditional edges |
 | Prompts（5 个） | 完成 | 外置在 `prompts/*.md`，热加载 |
-| 测试 | 完成 | 22/22 单测；slow 标记的真实渲染冒烟测已规划 |
+| 测试 | 完成 | 25/25 单测；slow 标记的真实渲染冒烟测已规划 |
 | 端到端验收（MVP 1.0） | 完成 | pythagorean 输入 → 10.47s mp4 |
 | 端到端验收（MVP 2.0） | 进行中 | 反思 cycle 单测已通过；待真实论文跑通 |
 
@@ -74,7 +74,7 @@
 - `tests/test_coder.py`（fence 抽取、no-fence 兜底、error_feedback 回灌进 prompt）
 - `tests/test_graph_mvp1.py`（端到端 mock 跑通；render 成功 / skip 两条路径）
 - `tests/test_graph_mvp2.py`（**反思闭环关键**：两次 latex error 后第三次成功；max_retries=1 give_up 回归）
-- 当前结果：**22/22 通过**
+- 当前结果：**25/25 通过**（含 3 条 CRITICAL fix 回归测试）
 
 ### 端到端验收
 - **MVP 1.0** 真实跑通：`examples/mvp1/pythagorean.txt` → `runs/20260510-080654-3a1159/final/output.mp4`，时长 10.47s，854×480@15fps，h264，87.7 KB
@@ -90,6 +90,20 @@
 ### 工程脚手架（HPC 友好但非必需）
 - `scripts/setup_env.sh`、`install_tinytex.sh`、`render_node.sh`、`smoke_test.sh`
 - 这些只是辅助脚本；非 HPC 用户走 `pip install -e ".[dev]"` 即可，无需 source 任何脚本
+
+### 初次代码 review 后的 CRITICAL 修复
+基于 Claude 端 review（codex 因 squid 拒 `auth.openai.com` 暂不可用）的 3 个 CRITICAL 问题已修：
+
+- **C1**（`graphs/mvp2.py:render_node`）— 前序节点失败时 `state["storyboard"]` 直接 KeyError 崩栈。改为 `.get()` + 三层守卫（storyboard 缺失 / scene idx 越界 / current_code 空）→ 返回 `fatal_error` 而非 raise。
+- **C2**（`state.py` + `graphs/mvp2.py`）— `fatal_error` 字段同时表达"全局致命"与"per-scene give_up"两种语义，`init_scene_node` / `advance_scene_node` 一律重置抹掉了 parser/summarizer/storyboarder 的真实致命错。改：
+  - 新增 `state.skipped_scenes: Annotated[list[str], operator.add]` 字段记录单 scene 放弃
+  - 删除 `init_scene_node` / `advance_scene_node` 的 `fatal_error: None` 重置
+  - graph 在 parser → summarizer → storyboarder 三处加 `_is_fatal` conditional edge，`fatal_error` 一旦置位直接跳到 END
+- **C3**（`agents/storyboarder.py` + `summarizer.py` + `llm.py`）— `with_structured_output(...).invoke(...)` 在 LLM schema drift 时直接抛 `OutputParserException` / `ValidationError`，整个 run 崩。新增 `llm.safe_structured_invoke()` helper（重试一次 + 严格 JSON 提示），storyboarder/summarizer 改用并将异常转为 `fatal_error`。
+
+回归测试 3 条（`test_storyboarder_fatal_on_validation_error`、`test_mvp2_early_exit_on_parser_fatal`、`test_mvp2_render_node_guards_missing_storyboard`）已通过，单测总数 22 → 25。
+
+剩余 9 个 HIGH 与 12 个 MEDIUM 见 To Do.F「工程债」。
 
 ---
 

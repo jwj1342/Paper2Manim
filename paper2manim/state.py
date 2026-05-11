@@ -81,9 +81,13 @@ class PaperState(TypedDict, total=False):
 
     # ---- Output ----
     rendered_videos: Annotated[list[str], operator.add]  # mp4 paths in scene order
+    skipped_scenes: Annotated[list[str], operator.add]  # scene names that gave up after retries
     final_video_path: str | None
 
     # ---- Control flags ----
+    # `fatal_error` is for graph-level fatal errors only (parser/summarizer/storyboarder/
+    # missing-input failures). It triggers early exit to END. Do NOT use this for
+    # per-scene give_up — that goes into `skipped_scenes` via the reviewer flow.
     fatal_error: str | None
     quality: Literal["l", "m", "h"]
     skip_render: bool  # set by CLI --no-render

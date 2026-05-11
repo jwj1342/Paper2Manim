@@ -165,6 +165,7 @@ def test_mvp2_reflection_gives_up_at_cap(stub_pipeline, tmp_path, monkeypatch):
         "pdf_path": str(tmp_path / "fake.pdf"),
         "attempts": [],
         "rendered_videos": [],
+        "skipped_scenes": [],
         "current_scene_idx": 0,
         "iter_count": 0,
         "max_retries": 1,
@@ -176,3 +177,88 @@ def test_mvp2_reflection_gives_up_at_cap(stub_pipeline, tmp_path, monkeypatch):
     assert all(a["render_result"]["status"] == "error" for a in out["attempts"])
     # Either fatal_error from concat, or final_video_path missing
     assert not out.get("rendered_videos")
+    # C2 regression: gave-up scene must be recorded in skipped_scenes (not fatal_error)
+    assert out.get("skipped_scenes") == ["OneScene"]
+
+
+def test_mvp2_early_exit_on_parser_fatal(monkeypatch):
+    """C2 regression: a fatal_error set by parser must short-circuit to END,
+    not cascade through summarizer/storyboarder/coder/render.
+
+    Note: nodes are bound into the graph at build time, so we must monkeypatch
+    BEFORE calling build_mvp2_graph().
+    """
+    from paper2manim.graphs import mvp2 as mvp2_mod
+
+    # 1) Parser sets fatal_error
+    def parser_sets_fatal(state):
+        return {"fatal_error": "parser: pdf missing"}
+
+    monkeypatch.setattr(mvp2_mod, "parser_node", parser_sets_fatal)
+
+    # 2) Sentinels for downstream nodes
+    called = {"summarizer": False, "storyboarder": False, "init_scene": False,
+              "coder": False, "render": False, "reviewer": False}
+
+    def make_sentinel(name):
+        def fn(state):
+            called[name] = True
+            return {}
+        return fn
+
+    for name in called:
+        monkeypatch.setattr(mvp2_mod, f"{name}_node", make_sentinel(name))
+
+    # 3) Build graph AFTER patching, so the patched functions are bound
+    g = mvp2_mod.build_mvp2_graph()
+    out = g.invoke(
+        {
+            "run_id": "early-exit",
+            "input_kind": "pdf",
+            "pdf_path": "/does/not/exist.pdf",
+            "attempts": [],
+            "rendered_videos": [],
+            "skipped_scenes": [],
+            "current_scene_idx": 0,
+            "iter_count": 0,
+            "max_retries": 3,
+            "quality": "l",
+            "skip_render": False,
+        },
+        config={"recursion_limit": 30},
+    )
+
+    assert out.get("fatal_error") == "parser: pdf missing"
+    assert not any(called.values()), f"early-exit broken; called: {called}"
+
+
+def test_mvp2_render_node_guards_missing_storyboard(monkeypatch, tmp_path):
+    """C1 regression: render_node must return fatal_error (not KeyError) when
+    storyboard is missing or scene index is out of range."""
+    from paper2manim.graphs.mvp2 import render_node
+
+    # Missing storyboard
+    out = render_node({"run_id": "r", "current_scene_idx": 0, "current_code": "x"})
+    assert out.get("fatal_error", "").startswith("render: storyboard")
+
+    # Index out of range
+    out = render_node({
+        "run_id": "r",
+        "storyboard": {"title": "t", "scenes": [{"name": "S", "description": "d", "duration_hint": 5}]},
+        "current_scene_idx": 5,
+        "current_code": "x",
+    })
+    assert "out of range" in out.get("fatal_error", "")
+
+    # Empty code
+    out = render_node({
+        "run_id": "r",
+        "storyboard": {"title": "t", "scenes": [{"name": "S", "description": "d", "duration_hint": 5}]},
+        "current_scene_idx": 0,
+        "current_code": "",
+    })
+    assert "current_code" in out.get("fatal_error", "")
+
+    # skip_render flag honored, no fatal
+    out = render_node({"skip_render": True, "current_scene_idx": 0})
+    assert out == {}
