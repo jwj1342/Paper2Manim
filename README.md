@@ -1,0 +1,303 @@
+# Paper2Manim
+
+> 探索"学术论文 → 高质量动画讲解视频"的端到端自动化路径。
+
+## 研究背景
+
+科学研究的产出正在指数级增长，但学术论文密集的文本与复杂的数学公式构成了显著的知识传播壁垒。视频——尤其是程序化绘制的动画讲解——已被证明是降低认知负荷、普及复杂概念的最有效媒介之一。然而，高质量学术动画的制作（如使用 [Manim](https://www.manim.community/) 库）门槛极高：创作者既要深入理解论文的硬核内容，又要具备剧本重构能力，最后还要写出复杂的程序化动画代码。
+
+近年来大语言模型（LLM）在长文本理解、逻辑推理与代码生成上的突破，让"用 AI 自动接管这条创作流水线"从想象变为可能。本项目希望系统性地填补**硬核学术文本** ↔ **程序化视觉代码**之间的鸿沟，把过去只有少数极客愿意手工完成的事，变成一条可被研究、被评估、被改进的科研管线。
+
+## 核心研究问题
+
+> 如何构建一个具备自我纠错能力的自主多智能体系统，把冗长复杂的多模态学术论文，自动转化为逻辑连贯、视觉准确、代码可执行的 Manim 动画视频？
+
+围绕这一问题，我们追求三个层面的研究贡献：
+
+1. **解耦的多智能体协同流水线**——把"读论文"、"写剧本"、"写代码"分别交给职责清晰的智能体（Parser → Summarizer → Storyboarder → Coder），用显式的 `StateGraph` 控制信息流转，避免单一长上下文 prompt 带来的逻辑断裂。
+2. **沙盒执行 + 反思纠错的闭环**——Manim 代码的失败远不止语法错误，还包括 LaTeX 编译失败、对象遮挡、坐标越界等"视觉逻辑错误"。我们引入 **Reviewer 智能体**：它在沙盒中真实运行 Coder 生成的代码，把 traceback、LaTeX 日志、源码摘录结构化后回灌给 Coder 迭代修复。希望显著提升一次性成功率（Pass@1）。
+3. **跨学科 Paper-to-Video 评估基准**——定义一套全新的指标体系（内容保真度 / 视觉连贯性 / 代码可执行性），并开源含数学、CS、物理多学科的"论文 ↔ 分镜 ↔ 高质量 Manim 代码"对齐数据集，为后续工作提供可比基线。
+
+研究提案的完整版本见 [`docs/ResearchProposal.md`](./docs/ResearchProposal.md)。
+
+## 路线图
+
+| 阶段 | 状态 | 输入 | 处理 | 输出 | 核心研究主张 |
+|---|---|---|---|---|---|
+| **MVP 1.0** | 已验证 | 短文本（摘要 / 单定理） | Storyboarder → Coder → Render | 15–30 秒视频 | 验证最短端到端链路可行 |
+| **MVP 2.0** | 进行中 | 完整 PDF | Parser(Marker) → Summarizer → Storyboarder → Coder ⇄ Reviewer 反思闭环 → Concat | 1–2 分钟多场景视频 | 反思机制对 Pass@1 的提升 |
+| MVP 3.0 | 计划中 | PDF + 用户风格 | + VLM Critic + 图表抽取 + TTS 音画同步 | 3–5 分钟带配音视频 | 视觉感知与多模态融合 |
+
+**当前状态**：MVP 1.0 端到端已验证（LLM 生成代码 + 沙盒渲染均成功）。MVP 2.0 的全部 agents、graph 拓扑、反思 conditional edge 已实现并通过单测，待真实论文跑通验收。详细进度与 To Do 清单见 [`docs/progress.md`](./docs/progress.md)。
+
+> **新协作者请直接阅读 [`docs/getting-started.md`](./docs/getting-started.md)**——一份在普通笔记本 / 服务器上从零跑通的详尽入门指南，含三大平台依赖、API key 申请、第一个 demo、看视频、改 prompt、常见报错排查。
+
+## 环境要求
+
+| 依赖 | 用途 | 备注 |
+|---|---|---|
+| **Python ≥ 3.11, < 3.13** | 主语言 | 已在 3.11 上验证 |
+| **ffmpeg** | Manim 视频编码 | 系统包管理器装即可 |
+| **LaTeX**（推荐 TeX Live full / MacTeX / TinyTeX） | Manim 公式渲染 | Manim 文档列出的最小包集见下文 |
+| **MiMo API key** | LLM 调用 | 从 [MiMo 控制台](https://www.xiaomimimo.com/) 申请 Token Plan，`tp-` 前缀 |
+| 网络 | 调用 LLM API + 首次安装时编译 `skia-pathops` | 完全离线环境需要预编译 wheel |
+
+按平台安装系统依赖：
+
+```bash
+# Ubuntu / Debian
+sudo apt install ffmpeg python3.11 python3.11-venv \
+    texlive texlive-latex-extra texlive-fonts-extra texlive-science \
+    tipa cm-super dvisvgm
+
+# macOS (Homebrew)
+brew install ffmpeg python@3.11
+brew install --cask mactex-no-gui   # or: install TinyTeX via R
+
+# Windows
+# 推荐用 WSL2 + Ubuntu 路径；原生 Windows 可走 conda + MikTeX，但未在本项目中验证。
+```
+
+无 sudo 的环境下，可装[用户级 TinyTeX](https://yihui.org/tinytex/)：
+```bash
+curl -sL https://yihui.org/tinytex/install-bin-unix.sh | sh
+~/.TinyTeX/bin/x86_64-linux/tlmgr install \
+    standalone preview doublestroke ms setspace rsfs relsize ragged2e \
+    fundus-calligra microtype wasysym physics babel-english \
+    cm-super xcolor amsmath amssymb dvisvgm
+export PATH=$HOME/.TinyTeX/bin/x86_64-linux:$PATH
+```
+
+## 安装
+
+```bash
+# 1) 拉代码
+git clone <this-repo> Paper2Manim
+cd Paper2Manim
+
+# 2) 创建并激活虚拟环境
+python -m venv .venv
+source .venv/bin/activate           # macOS / Linux
+# .venv\Scripts\activate            # Windows PowerShell
+
+# 3) 安装 paper2manim 与依赖
+pip install --upgrade pip wheel
+pip install -e .                    # MVP 1.0 所需
+pip install -e ".[mvp2]"            # 加 MVP 2.0：Marker PDF 解析（首次会下载 ~3GB 模型权重到 ~/.cache/huggingface）
+pip install -e ".[dev]"             # 加开发工具：pytest / ruff / mypy
+```
+
+> 提示：Manim 的 `skia-pathops` 依赖在 PyPI 上没有 Linux 预编译 wheel，会从源码编译并通过 git 拉 `chromium.googlesource.com` 上的 skia 子模块。首次安装请确保该域名可达，预计 5–10 分钟。
+
+## 配置 API key 与环境变量
+
+我们用 [`pydantic-settings`](https://docs.pydantic.dev/latest/concepts/pydantic_settings/) 从项目根目录的 **`.env`** 文件读取配置。仓库提供了 [`.env.example`](./.env.example) 作为模板，按以下步骤生成本地配置：
+
+```bash
+cp .env.example .env
+# 用任意编辑器打开 .env，把 MIMO_API_KEY 改成你自己的 tp- key
+```
+
+`.env` 已加入 `.gitignore`，不会被误提交。每个变量的含义都在 `.env.example` 里有详细注释，最关键的两个：
+
+| 变量 | 必填？ | 说明 |
+|---|---|---|
+| `MIMO_API_KEY` | 必填 | MiMo Token Plan 的 `tp-` 前缀 key |
+| `MIMO_BASE_URL` | 默认即可 | `https://token-plan-cn.xiaomimimo.com/v1`（**注意不是** `api.xiaomimimo.com`，那个端点不认 `tp-` key） |
+| `PAPER2MANIM_DEFAULT_MODEL` | 默认即可 | `flash`（→ `mimo-v2.5`）/ `pro`（→ `mimo-v2.5-pro`）/ `v2`（→ `mimo-v2-pro`，备用） |
+| `PAPER2MANIM_MAX_RETRIES` | 默认即可 | MVP 2.0 反思循环每个 scene 的最大重试轮数（默认 3） |
+| `PAPER2MANIM_QUALITY` | 默认即可 | Manim 渲染质量 `l`/`m`/`h`（480p15 / 720p30 / 1080p60） |
+| `PAPER2MANIM_RUNS_DIR` | 默认即可 | 运行产物目录，默认是项目根下的 `runs/` |
+
+环境变量的读取在 import `paper2manim.config` 时一次完成。激活 venv 后，从项目根目录运行 CLI 即可，**不需要**手工 `export` 任何变量；`.env` 会被自动加载。
+
+确认配置生效：
+```bash
+paper2manim info
+# {"MIMO_BASE_URL": "...", "MIMO_API_KEY_set": true, ...}
+```
+
+## 使用方法
+
+### MVP 1.0：短文本 → 单场景视频
+
+输入是一段普通文本（一篇论文摘要 / 一个核心定理的描述）。系统会调用 LLM 生成 1 个 scene 的 storyboard 与 Manim 代码，然后在沙盒里渲染。
+
+```bash
+# 用一个示例输入跑通
+paper2manim mvp1 --input examples/mvp1/pythagorean.txt
+
+# 直接传文本字符串
+paper2manim mvp1 --input "Newton's second law: F = m·a, applied to a sliding block."
+
+# 提高视频质量（更慢）
+paper2manim mvp1 --input examples/mvp1/fourier_intuition.txt --quality m
+
+# 仅生成代码、跳过渲染（快速调试 prompt 时用）
+paper2manim mvp1 --input examples/mvp1/eulers_identity.txt --no-render
+```
+
+### MVP 2.0：完整 PDF → 多场景视频（带反思纠错）
+
+输入是一个 PDF 文件路径。系统先用 Marker 把 PDF 转成保留公式的 markdown，然后 Summarizer / Storyboarder 拆出 2–5 个 scene，逐 scene 让 Coder 写代码并由 Reviewer 在沙盒里检验，失败则带着结构化错误反馈让 Coder 修复，最多重试 `PAPER2MANIM_MAX_RETRIES` 次。最后用 ffmpeg 把成功的 scene 串成最终视频。
+
+```bash
+# 完整跑通一篇论文
+paper2manim mvp2 --pdf path/to/your-paper.pdf
+
+# 调整反思轮数 + 渲染质量
+paper2manim mvp2 --pdf paper.pdf --max-retries 5 --quality m
+
+# 只生成代码不渲染（验证 prompt + 反思逻辑）
+paper2manim mvp2 --pdf paper.pdf --no-render
+```
+
+### 输出工件
+
+每次运行会创建 `runs/<run_id>/`（`run_id` 是 `YYYYMMDD-HHMMSS-<6-hex>` 格式）：
+
+```
+runs/20260510-080654-3a1159/
+├── input.txt                  # 输入备份
+├── parsed.md                  # MVP 2.0：Marker 输出的 markdown
+├── summary.json               # MVP 2.0：论文结构化摘要
+├── storyboard.json            # 分镜脚本（含每个 scene 的 name / description / duration）
+├── attempts/                  # 每轮尝试的代码 + 渲染结果
+│   ├── 00_PythagorasIntro.py
+│   ├── 00_PythagorasIntro.render.json
+│   ├── 01_PythagorasIntro.py             # 反思后的第二轮（如果有）
+│   └── ...
+├── final/
+│   └── output.mp4             # 最终视频
+└── trace.jsonl                # 每个 graph 节点的 input/output 流水
+```
+
+调试时优先看：`storyboard.json`（LLM 怎么拆的剧本）→ `attempts/*.py`（生成的代码）→ `attempts/*.render.json`（结构化错误信息）→ `trace.jsonl`（节点级时间线）。
+
+### 测试
+
+```bash
+pytest -m "not slow"     # 默认：mock LLM 与 mock render，~2s 跑完
+pytest                   # 含 slow 标记的真实渲染冒烟测试
+```
+
+## 项目目录
+
+仓库自顶向下的组织如下。每个目录的职责都做了清晰切分，方便协作者按兴趣深入。
+
+```
+Paper2Manim/
+├── README.md                  ← 你正在看的文件
+├── pyproject.toml             ← Python 包元数据 + 依赖（含 [mvp2] / [dev] extras）
+├── requirements.txt           ← pip freeze 锁定的依赖（用于精确复现）
+├── requirements-dev.txt       ← 开发工具子集（pytest / ruff / mypy）
+├── .env.example               ← 环境变量模板（复制为 .env 后填 MIMO_API_KEY）
+├── .gitignore                 ← 屏蔽 .venv / runs / media / .env / MiMo-API.txt
+│
+├── docs/                      ← 项目文档
+│   ├── ResearchProposal.md      研究提案原文（中文，研究背景与三大贡献）
+│   ├── getting-started.md       面向新协作者的非 HPC 入门指南（含常见问题）
+│   └── progress.md              当前进度 + To Do + 已知问题 + 验收基线
+│
+├── paper2manim/               ← 主 Python 包（pip install -e . 后可 import）
+│   ├── __init__.py
+│   ├── cli.py                   click 命令行入口；子命令 mvp1 / mvp2 / info
+│   ├── config.py                pydantic-settings 从 .env 读取所有运行时配置
+│   ├── llm.py                   MiMo (Xiaomi Token Plan) 客户端工厂
+│   │                            含模型 alias：flash → mimo-v2.5, pro → mimo-v2.5-pro
+│   ├── state.py                 LangGraph 共享状态 TypedDict (PaperState)
+│   │                            所有 agent 节点的输入输出契约都在这里
+│   ├── prompts.py               从 prompts/*.md 读取 system prompt（热加载）
+│   ├── artifacts.py             runs/<run_id>/ 目录管理 + trace.jsonl 流水
+│   ├── logging_setup.py         logging + 可选 LangSmith hook
+│   │
+│   ├── agents/                  ← LLM 智能体（一个文件一个 agent）
+│   │   ├── storyboarder.py        text/summary → Storyboard JSON（MVP 1.0）
+│   │   ├── coder.py               scene + error_feedback → Manim 代码（MVP 1.0）
+│   │   ├── summarizer.py          markdown → 关键贡献 / 公式 / 概念（MVP 2.0）
+│   │   └── reviewer.py            RenderResult → retry / give_up + hint（MVP 2.0）
+│   │
+│   ├── parsers/                 ← 输入解析器
+│   │   ├── text.py                MVP 1.0：plain text 直通
+│   │   └── marker.py              MVP 2.0：用 Marker 把 PDF 转 markdown（含公式 LaTeX）
+│   │
+│   ├── sandbox/                 ← Manim 代码的隔离执行 + 错误结构化
+│   │   ├── render.py              subprocess 调 manim CLI；含 setrlimit（CPU/内存/文件大小限制）
+│   │   ├── classify.py            stderr 分类：python / latex / manim_runtime / timeout
+│   │   └── concat.py              ffmpeg concat demuxer 拼多 scene 为单 mp4
+│   │
+│   ├── graphs/                  ← LangGraph 工作流定义
+│   │   ├── mvp1.py                线性拓扑：storyboarder → coder → render → END
+│   │   └── mvp2.py                含反思 conditional edge 的多 scene 拓扑
+│   │                              （reviewer 后分流：retry → coder | advance → next scene）
+│   │
+│   └── schemas/                 ← Pydantic 数据契约
+│       ├── storyboard.py          SceneModel / StoryboardModel（PascalCase 校验）
+│       ├── summary.py             SummaryModel + FormulaItem（MVP 2.0）
+│       └── error_feedback.py      RenderResultModel / ErrorFeedback
+│
+├── prompts/                   ← 所有 LLM 系统提示词（外置 / 热加载）
+│   ├── storyboarder.md          剧本导演人设 + JSON schema + 一个 one-shot 示例
+│   ├── coder.md                 Manim 工程师人设 + 0.20 API 限制 + 反思修复模板
+│   ├── manim_skill_rules.md     Manim 0.20 API 速查（被 coder.md 引用）
+│   ├── summarizer.md            论文摘要器（MVP 2.0）
+│   └── reviewer.md              代码审阅器（MVP 2.0），含 retry / give_up 启发
+│
+├── tests/                     ← pytest 测试套件
+│   ├── conftest.py              共享 fixtures（隔离 runs 目录、mock LLM）
+│   ├── test_classify.py         9 个错误分类用例
+│   ├── test_llm_client.py       MiMo client 边界条件（key 缺失、未知 alias）
+│   ├── test_storyboarder.py     mock LLM 验证结构化输出
+│   ├── test_coder.py            python 块抽取、error_feedback 回灌进 prompt
+│   ├── test_graph_mvp1.py       端到端 mock：含 / 不含 render 两条路径
+│   └── test_graph_mvp2.py       反思闭环：两次失败后第三次成功 + max_retries give_up
+│
+├── examples/                  ← 输入样例
+│   ├── mvp1/                    5 个固定短文本 demo（pythagorean / fourier / euler / newton / linear-regression）
+│   └── mvp2/                    （留空，由用户放入真实论文 PDF）
+│
+├── scripts/                   ← 可选辅助脚本（普通用户用不到，仅 HPC 加速用）
+│   ├── setup_env.sh             模块加载 + venv 创建 + pip install 一条龙
+│   ├── install_tinytex.sh       无 sudo 装用户级 LaTeX
+│   ├── render_node.sh           sbatch 模板（Slurm 集群批量渲染）
+│   └── smoke_test.sh            最小 demo 冒烟脚本
+│
+└── runs/                      ← 运行时产物（gitignore；每次运行一个子目录）
+    └── <run_id>/                YYYYMMDD-HHMMSS-<6hex>
+        ├── input.{txt,pdf}
+        ├── parsed.md             ← MVP 2.0 only
+        ├── summary.json          ← MVP 2.0 only
+        ├── storyboard.json
+        ├── attempts/             ← 每个 scene 的代码 + 渲染结果
+        │   ├── 00_<Scene>.py
+        │   ├── 00_<Scene>.render.json
+        │   └── ...
+        ├── final/output.mp4      ← 最终视频
+        └── trace.jsonl           ← graph 节点级流水
+```
+
+**速查：我想 X，应该看哪里？**
+
+| 你想 ... | 去看 |
+|---|---|
+| 跑第一个 demo | [`docs/getting-started.md`](./docs/getting-started.md) |
+| 改 LLM 行为 | `prompts/<agent>.md`（不需要重装） |
+| 加新 agent | `paper2manim/agents/`、`paper2manim/state.py`、`paper2manim/graphs/mvp2.py` |
+| 改沙盒资源限制 / 错误分类 | `paper2manim/sandbox/render.py` 与 `classify.py` |
+| 知道当前进度 / 待办 | [`docs/progress.md`](./docs/progress.md) |
+| 看研究背景 | [`docs/ResearchProposal.md`](./docs/ResearchProposal.md) |
+| 排查一次失败的运行 | `runs/<run_id>/storyboard.json` → `attempts/*.py` → `attempts/*.render.json` → `trace.jsonl` |
+
+## 与协作者的工作约定
+
+- **不要把 `.env` 或 `MiMo-API.txt` 提交到仓库**——这两个文件已被 `.gitignore` 屏蔽。
+- 改 prompt 不必改代码：`prompts/*.md` 是热加载的，diff 友好。
+- 加新 agent 时遵循已有 pattern：`agents/<name>.py` 写一个 `xxx_node(state) -> dict` 函数；在 `graphs/mvpN.py` 里挂到 `StateGraph` 上；把它对外的输入输出字段加到 `state.py` 的 `PaperState`。
+- 跑一次复杂 PDF 之前先用 `--no-render` 验证 LLM 端的产物（节省渲染开销）。
+
+## 参考与致谢
+
+- [Manim Community Edition](https://www.manim.community/) — 数学动画引擎
+- [LangGraph](https://www.langchain.com/langgraph) — 多智能体工作流编排
+- [Marker](https://github.com/VikParuchuri/marker) — 学术 PDF → markdown 解析
+- 设计上受 [Manimator](https://arxiv.org/abs/2507.14306)、[Code2Video](https://arxiv.org/abs/2510.01174)、[manim-generator](https://github.com/makefinks/manim-generator) 等工作启发

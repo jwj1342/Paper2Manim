@@ -1,0 +1,43 @@
+# Secrets
+.env
+MiMo-API.txt
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+*.egg
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+
+# Virtualenv
+.venv/
+venv/
+
+# Project-specific
+runs/
+media/
+.manim_cache/
+*.mp4
+*.mov
+*.gif
+
+# Jupyter
+.ipynb_checkpoints/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Plan / agent scratch
+.claude/

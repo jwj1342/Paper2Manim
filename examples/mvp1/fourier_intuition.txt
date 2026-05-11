@@ -1,0 +1,1 @@
+A Fourier series decomposes a periodic function into a sum of sines and cosines of different frequencies. Build intuition by starting with a square wave, then adding successive sine harmonics: as more terms are added, the partial sum visually approaches the square wave. Show f(x) ≈ Σ (4/(π n)) sin(n x) for n = 1, 3, 5, ..., and watch the approximation tighten with each new term.

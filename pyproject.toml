@@ -1,0 +1,54 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "paper2manim"
+version = "0.1.0"
+description = "LLM multi-agent system that converts academic papers into Manim animation videos"
+readme = "README.md"
+requires-python = ">=3.11,<3.13"
+authors = [{ name = "jwj" }]
+license = { text = "MIT" }
+dependencies = [
+    "langgraph>=1.0,<2.0",
+    "langchain-core>=0.3,<0.4",
+    "langchain-openai>=0.3,<0.4",
+    "openai>=1.50",
+    "pydantic>=2.7",
+    "pydantic-settings>=2.4",
+    "click>=8.1",
+    "python-dotenv>=1.0",
+    "manim==0.20.1",
+    "rich>=13",
+]
+
+[project.optional-dependencies]
+mvp2 = ["marker-pdf>=1.0"]
+dev = [
+    "pytest>=8",
+    "pytest-mock>=3.12",
+    "ruff>=0.5",
+    "mypy>=1.10",
+]
+
+[project.scripts]
+paper2manim = "paper2manim.cli:cli"
+
+[tool.setuptools.packages.find]
+include = ["paper2manim*"]
+exclude = ["tests*", "runs*", "examples*"]
+
+[tool.pytest.ini_options]
+markers = [
+    "slow: requires real LLM API or real Manim render (skipped on login node)",
+]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP"]
+ignore = ["E501"]

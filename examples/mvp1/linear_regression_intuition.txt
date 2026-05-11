@@ -1,0 +1,1 @@
+Simple linear regression fits a line y = w x + b through scattered (x_i, y_i) points by minimizing the sum of squared residuals: L(w, b) = Σ (y_i - w x_i - b)^2. Visualize by plotting a small set of dots, drawing a candidate line, drawing vertical residual segments from each dot to the line, and showing the loss decreasing as the line is rotated/translated to the optimal fit.

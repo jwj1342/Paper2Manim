@@ -1,0 +1,178 @@
+"""Reflection-loop tests for the MVP 2.0 graph (mocks LLM + render)."""
+
+from unittest.mock import MagicMock
+
+import pytest
+
+from paper2manim.schemas import StoryboardModel, SummaryModel
+
+
+@pytest.fixture
+def stub_pipeline(monkeypatch):
+    """Stub all LLM calls + parser + render so the graph is purely deterministic."""
+    summary_obj = SummaryModel(
+        title="Test Paper",
+        key_contributions=["A", "B"],
+        key_formulas=[],
+        main_concepts=["concept"],
+        scene_suggestions=["show it"],
+    )
+    sb_obj = StoryboardModel(
+        title="Test Paper",
+        scenes=[{"name": "OneScene", "description": "x", "duration_hint": 4.0}],
+    )
+
+    summarizer_struct = MagicMock()
+    summarizer_struct.invoke.return_value = summary_obj
+    sb_struct = MagicMock()
+    sb_struct.invoke.return_value = sb_obj
+
+    coder_msg = MagicMock()
+    coder_msg.content = "```python\nfrom manim import *\nclass OneScene(Scene):\n    def construct(self):\n        self.wait(0.1)\n```"
+
+    reviewer_msg = MagicMock()
+    reviewer_msg.content = '{"decision":"retry","hint":"replace \\\\mathbbb with \\\\mathbb"}'
+
+    llm = MagicMock()
+
+    def with_structured_output(model_cls):
+        if model_cls.__name__ == "SummaryModel":
+            return summarizer_struct
+        if model_cls.__name__ == "StoryboardModel":
+            return sb_struct
+        return MagicMock()
+
+    llm.with_structured_output.side_effect = with_structured_output
+
+    invoke_calls = {"n": 0}
+
+    def fake_invoke(messages):
+        # storyboarder/summarizer go through with_structured_output;
+        # coder & reviewer call llm.invoke directly
+        # Discriminate by message content (system prompt for reviewer mentions "review agent")
+        sys_msg = messages[0][1] if messages else ""
+        if "review" in sys_msg.lower() and "build-and-review" in sys_msg.lower():
+            return reviewer_msg
+        return coder_msg
+
+    llm.invoke.side_effect = fake_invoke
+
+    monkeypatch.setattr("paper2manim.agents.storyboarder.get_llm", lambda *a, **kw: llm)
+    monkeypatch.setattr("paper2manim.agents.coder.get_llm", lambda *a, **kw: llm)
+    monkeypatch.setattr("paper2manim.agents.summarizer.get_llm", lambda *a, **kw: llm)
+    monkeypatch.setattr("paper2manim.agents.reviewer.get_llm", lambda *a, **kw: llm)
+    monkeypatch.setattr("paper2manim.graphs.mvp2.parse_pdf", lambda p: "# Test paper\nbody")
+
+    # First two render calls fail with latex error; third succeeds.
+    render_calls = {"n": 0}
+
+    def fake_render(code, scene, **kw):
+        render_calls["n"] += 1
+        if render_calls["n"] <= 2:
+            return {
+                "status": "error",
+                "category": "latex",
+                "exit_code": 1,
+                "scene": scene,
+                "video_path": None,
+                "error_type": "LatexError",
+                "error_message": "! Undefined control sequence \\mathbbb",
+                "traceback_tail": "LatexError",
+                "source_excerpt": [{"line": 1, "code": "x"}],
+                "tex_log_excerpt": "! Undefined control sequence \\mathbbb",
+                "workdir": str(kw.get("workdir", "/tmp")),
+            }
+        from pathlib import Path
+
+        fake_mp4 = Path(kw.get("workdir", "/tmp")) / "fake.mp4"
+        fake_mp4.parent.mkdir(parents=True, exist_ok=True)
+        fake_mp4.write_bytes(b"\x00")
+        return {
+            "status": "success",
+            "category": None,
+            "exit_code": 0,
+            "scene": scene,
+            "video_path": str(fake_mp4),
+            "workdir": str(kw.get("workdir", "/tmp")),
+        }
+
+    monkeypatch.setattr("paper2manim.graphs.mvp2.render", fake_render)
+
+    # Stub concat: just write a placeholder
+    def fake_concat(paths, out):
+        from pathlib import Path
+
+        out = Path(out)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_bytes(b"\x00")
+        return out
+
+    monkeypatch.setattr("paper2manim.graphs.mvp2.concat_videos", fake_concat)
+    return {"render_calls": render_calls, "llm": llm}
+
+
+def test_mvp2_reflection_succeeds_after_two_retries(stub_pipeline, tmp_path):
+    from paper2manim.graphs.mvp2 import build_mvp2_graph
+
+    g = build_mvp2_graph()
+    state = {
+        "run_id": "mvp2-test",
+        "input_kind": "pdf",
+        "pdf_path": str(tmp_path / "fake.pdf"),
+        "attempts": [],
+        "rendered_videos": [],
+        "current_scene_idx": 0,
+        "iter_count": 0,
+        "max_retries": 4,
+        "quality": "l",
+        "skip_render": False,
+    }
+    out = g.invoke(state, config={"recursion_limit": 80})
+
+    # 2 latex failures + 1 success = 3 attempts
+    assert stub_pipeline["render_calls"]["n"] == 3
+    assert len(out["attempts"]) == 3
+    assert out["attempts"][-1]["render_result"]["status"] == "success"
+    assert out.get("final_video_path", "").endswith(".mp4")
+
+
+def test_mvp2_reflection_gives_up_at_cap(stub_pipeline, tmp_path, monkeypatch):
+    """If max_retries=1, the loop should give up after one retry."""
+    from paper2manim.graphs.mvp2 import build_mvp2_graph
+
+    # Force render to always fail
+    def always_fail(code, scene, **kw):
+        return {
+            "status": "error",
+            "category": "latex",
+            "exit_code": 1,
+            "scene": scene,
+            "video_path": None,
+            "error_type": "LatexError",
+            "error_message": "still broken",
+            "traceback_tail": "...",
+            "source_excerpt": None,
+            "tex_log_excerpt": None,
+            "workdir": str(kw.get("workdir", "/tmp")),
+        }
+
+    monkeypatch.setattr("paper2manim.graphs.mvp2.render", always_fail)
+
+    g = build_mvp2_graph()
+    state = {
+        "run_id": "mvp2-give-up",
+        "input_kind": "pdf",
+        "pdf_path": str(tmp_path / "fake.pdf"),
+        "attempts": [],
+        "rendered_videos": [],
+        "current_scene_idx": 0,
+        "iter_count": 0,
+        "max_retries": 1,
+        "quality": "l",
+        "skip_render": False,
+    }
+    out = g.invoke(state, config={"recursion_limit": 60})
+    # No successful video; concat should have raised but our fake handles empty
+    assert all(a["render_result"]["status"] == "error" for a in out["attempts"])
+    # Either fatal_error from concat, or final_video_path missing
+    assert not out.get("rendered_videos")

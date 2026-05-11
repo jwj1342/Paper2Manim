@@ -1,0 +1,1 @@
+Newton's second law of motion: F = m a. The net force on an object equals its mass times its acceleration. Visualize a block on a horizontal plane: an arrow labelled F is applied; the block accelerates rightward proportional to F and inversely proportional to its mass m. Display the equation F = m a and show how doubling F doubles a, while doubling m halves a.

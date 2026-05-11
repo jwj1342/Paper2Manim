@@ -1,0 +1,1 @@
+Euler's identity, e^(iπ) + 1 = 0, links five fundamental constants of mathematics — e, i, π, 1, and 0 — in a single elegant equation. Show how it follows from Euler's formula e^(ix) = cos(x) + i sin(x) by setting x = π. Visualize a unit-circle dot rotating from angle 0 to π, with the real and imaginary projections drawn alongside.
