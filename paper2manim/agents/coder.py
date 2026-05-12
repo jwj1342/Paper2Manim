@@ -26,6 +26,57 @@ def extract_python_block(text: str) -> str:
     return text.strip()
 
 
+def _resolve_referenced_tables(scene: dict, all_tables: list[dict]) -> list[dict]:
+    """Look up the TableAsset dicts referenced by this scene's `referenced_tables` ids."""
+    ref_ids = scene.get("referenced_tables") or []
+    if not ref_ids:
+        return []
+    by_id = {t.get("tab_id"): t for t in all_tables}
+    return [by_id[r] for r in ref_ids if r in by_id]
+
+
+def _format_table_for_coder(tab: dict) -> str:
+    """Render one TableAsset in a compact, coder-friendly JSON block."""
+    payload = {
+        "tab_id": tab.get("tab_id"),
+        "header": tab.get("header"),
+        "rows": tab.get("rows"),
+    }
+    if payload["header"] is None or payload["rows"] is None:
+        # Structured parse failed — fall back to the raw block so coder can still try
+        payload["raw_md"] = tab.get("raw_md")
+    return json.dumps(payload, ensure_ascii=False, indent=2)
+
+
+def _resolve_referenced_figures(scene: dict, all_figures: list[dict]) -> list[dict]:
+    """Look up the FigureAsset dicts referenced by this scene's `referenced_figures` ids."""
+    ref_ids = scene.get("referenced_figures") or []
+    if not ref_ids:
+        return []
+    by_id = {f.get("fig_id"): f for f in all_figures}
+    return [by_id[r] for r in ref_ids if r in by_id]
+
+
+def _format_figure_for_coder(fig: dict) -> str:
+    """Render one FigureAsset in a compact, coder-friendly JSON block.
+
+    The coder decides between two rendering paths based on the payload it sees:
+    - ``recipe`` present → reproduce via Manim using the FigureRecipe template
+    - ``recipe`` is None → embed the original via ``ImageMobject(path)``
+    """
+    sem = fig.get("semantics") or {}
+    payload = {
+        "fig_id": fig.get("fig_id"),
+        "path": fig.get("path"),
+        "fig_type": sem.get("fig_type"),
+        "redrawable": sem.get("redrawable"),
+        "one_line_summary": sem.get("one_line_summary"),
+        "key_elements": sem.get("key_elements", []),
+        "recipe": fig.get("recipe"),  # None when not redrawable or VLM produced no recipe
+    }
+    return json.dumps(payload, ensure_ascii=False, indent=2)
+
+
 def _build_user_prompt(state: PaperState) -> str:
     sb = state.get("storyboard")
     if not sb:
@@ -36,6 +87,37 @@ def _build_user_prompt(state: PaperState) -> str:
     blocks: list[str] = []
     blocks.append("## Current scene to implement\n")
     blocks.append(json.dumps(scene, ensure_ascii=False, indent=2))
+
+    # Phase 1: when the scene routed tables, inject the structured data + a pointer to
+    # the table-rendering rule in manim_skill_rules.md. Tables stay opt-in per scene.
+    referenced = _resolve_referenced_tables(scene, state.get("tables") or [])
+    if referenced:
+        blocks.append("\n## Tables to render in this scene\n")
+        blocks.append(
+            "Render each table below using Manim's `Table` mobject "
+            "(see Project conventions → Rendering tables). "
+            "Use the structured `header` and `rows` verbatim — do not invent or omit cells.\n\n"
+        )
+        for tab in referenced:
+            blocks.append(_format_table_for_coder(tab))
+            blocks.append("\n")
+
+    # Phase 2b/3: figures get one of two treatments based on `redrawable`. The coder
+    # consults the JSON payload below + Project conventions → "Embedding paper figures"
+    # vs "Reproducing figures via FigureRecipe".
+    referenced_figs = _resolve_referenced_figures(scene, state.get("figures") or [])
+    if referenced_figs:
+        blocks.append("\n## Figures to show in this scene\n")
+        blocks.append(
+            "For each figure below: if `recipe` is present, REPRODUCE it in Manim using the "
+            "FigureRecipe template (see Project conventions → Reproducing figures). "
+            "If `recipe` is null, EMBED the original via `ImageMobject(path)` "
+            "(see Project conventions → Embedding paper figures). "
+            "Use the figure's `one_line_summary` to write a 1-sentence on-screen caption.\n\n"
+        )
+        for fig in referenced_figs:
+            blocks.append(_format_figure_for_coder(fig))
+            blocks.append("\n")
 
     blocks.append("\n## Project conventions\n")
     blocks.append(load_prompt("manim_skill_rules"))

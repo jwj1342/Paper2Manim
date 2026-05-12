@@ -5,6 +5,17 @@ class SceneModel(BaseModel):
     name: str = Field(..., description="PascalCase Scene class name (used as manim render arg)")
     description: str = Field(..., description="Natural-language description of what the scene shows")
     duration_hint: float = Field(8.0, ge=1.0, le=60.0, description="Expected duration in seconds")
+    referenced_tables: list[str] = Field(
+        default_factory=list,
+        description="Optional list of tab_id strings (e.g. 'tab_001') that this scene should render. "
+        "Only set when state.tables has matching entries; leave empty otherwise.",
+    )
+    referenced_figures: list[str] = Field(
+        default_factory=list,
+        description="Optional list of fig_id strings (e.g. 'fig_001') that this scene should show. "
+        "Coder reproduces redrawable figures via FigureRecipe; embeds non-redrawable ones via "
+        "ImageMobject. Only set when state.figures has matching entries.",
+    )
 
     @field_validator("name")
     @classmethod

@@ -73,3 +73,17 @@ def copy_final_video(run_id: str, src: str, name: str) -> Path:
         dst = dst.with_suffix(".mp4")
     shutil.copy2(src, dst)
     return dst
+
+
+def save_figure_image(run_id: str, name: str, image: Any) -> Path:
+    """Save a PIL.Image under runs/<run_id>/assets/figures/<name>. Returns Path.
+
+    ``image`` is duck-typed as anything with a ``.save(path)`` method (PIL.Image),
+    so we don't need to import PIL eagerly — marker-pdf is the only producer and
+    is already an optional dep.
+    """
+    dest_dir = run_dir(run_id) / "assets" / "figures"
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    dest = dest_dir / name
+    image.save(dest)
+    return dest

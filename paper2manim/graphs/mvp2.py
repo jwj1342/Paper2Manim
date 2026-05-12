@@ -7,11 +7,13 @@ Reflection loop is the conditional edge `should_retry` after `reviewer`.
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 from typing import Any, Literal
 
 from langgraph.graph import END, StateGraph
 
 from paper2manim.agents.coder import coder_node
+from paper2manim.agents.figure_understander import figure_understander_node
 from paper2manim.agents.reviewer import reviewer_node
 from paper2manim.agents.storyboarder import storyboarder_node
 from paper2manim.agents.summarizer import summarizer_node
@@ -19,6 +21,7 @@ from paper2manim.artifacts import (
     append_trace,
     run_dir,
     save_attempt_result,
+    save_figure_image,
 )
 from paper2manim.parsers import parse_arxiv, parse_local_pdf
 from paper2manim.sandbox.concat import concat_videos
@@ -46,18 +49,62 @@ def parser_node(state: PaperState) -> dict[str, Any]:
     except Exception as exc:  # arxiv download error / Marker import error / etc.
         return {"fatal_error": f"parser: {type(exc).__name__}: {exc}"}
 
+    # Tables are pure text — assemble unconditionally so callers without a
+    # run_id (e.g. tests that bypass artifact persistence) still get them.
+    table_assets: list[dict] = [
+        {
+            "tab_id": f"tab_{i:03d}",
+            "raw_md": tab["raw_md"],
+            "fmt": tab["fmt"],
+            "caption": None,
+            "header": tab.get("header"),
+            "rows": tab.get("rows"),
+        }
+        for i, tab in enumerate(parsed.tables, start=1)
+    ]
+
+    # Figures require a disk path (and therefore a run_id) — without one we
+    # cannot expose them downstream, so figure_assets stays empty.
+    figure_assets: list[dict] = []
     if state.get("run_id"):
         ext = "tex" if parsed.fmt == "latex" else "md"
         (run_dir(state["run_id"]) / f"parsed.{ext}").write_text(parsed.text, encoding="utf-8")
+
+        for i, fig in enumerate(parsed.figures, start=1):
+            fig_id = f"fig_{i:03d}"
+            src_name = fig.get("source_name", "")
+            suffix = Path(src_name).suffix or ".png"
+            try:
+                saved = save_figure_image(state["run_id"], f"{fig_id}{suffix}", fig["pil_image"])
+            except Exception as exc:  # noqa: BLE001 — one bad image shouldn't kill the run
+                log.warning("[parser] failed to save figure %s: %s", src_name, exc)
+                continue
+            figure_assets.append(
+                {
+                    "fig_id": fig_id,
+                    "path": str(saved),
+                    "source_name": src_name,
+                    "caption": None,
+                }
+            )
+
         append_trace(
             state["run_id"],
             "parser",
-            {"chars": len(parsed.text), "fmt": parsed.fmt, "source": parsed.source},
+            {
+                "chars": len(parsed.text),
+                "fmt": parsed.fmt,
+                "source": parsed.source,
+                "n_figures": len(figure_assets),
+                "n_tables": len(table_assets),
+            },
         )
     return {
         "parsed_markdown": parsed.text,
         "parsed_format": parsed.fmt,
         "parser_source": parsed.source,
+        "figures": figure_assets,
+        "tables": table_assets,
     }
 
 
@@ -202,6 +249,7 @@ def has_more_scenes(state: PaperState) -> Literal["init_scene", "concat"]:
 def build_mvp2_graph():
     g = StateGraph(PaperState)
     g.add_node("parser", parser_node)
+    g.add_node("figure_understander", figure_understander_node)
     g.add_node("summarizer", summarizer_node)
     g.add_node("storyboarder", storyboarder_node)
     g.add_node("init_scene", init_scene_node)
@@ -214,9 +262,12 @@ def build_mvp2_graph():
     g.set_entry_point("parser")
 
     # Upstream stages: any fatal_error short-circuits to END instead of
-    # cascading into per-scene nodes that can't recover.
+    # cascading into per-scene nodes that can't recover. figure_understander
+    # itself never sets fatal_error, but the edge from it still honors any
+    # fatal_error inherited from upstream state.
     for src, dst in [
-        ("parser", "summarizer"),
+        ("parser", "figure_understander"),
+        ("figure_understander", "summarizer"),
         ("summarizer", "storyboarder"),
         ("storyboarder", "init_scene"),
     ]:

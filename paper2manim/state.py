@@ -52,6 +52,29 @@ class Attempt(TypedDict, total=False):
     reviewer_hint: str | None
 
 
+class FigureAsset(TypedDict, total=False):
+    fig_id: str  # e.g. "fig_001"
+    path: str  # absolute path under runs/<run_id>/assets/figures/
+    source_name: str  # original filename from the parser (e.g. marker's "image_001.png")
+    caption: str | None  # populated by future multimodal phase; None for Phase 0
+    # FigureSemantics.model_dump() — populated by figure_understander (Phase 2). None when VLM is
+    # disabled or the call failed; downstream consumers should treat None as "no info".
+    semantics: dict | None
+    # FigureRecipe.model_dump() — populated by figure_understander (Phase 3) when
+    # semantics.redrawable is True. None otherwise; coder falls back to ImageMobject embed.
+    recipe: dict | None
+
+
+class TableAsset(TypedDict, total=False):
+    tab_id: str  # e.g. "tab_001"
+    raw_md: str  # raw text of the markdown table block or LaTeX tabular environment
+    fmt: Literal["markdown", "latex"]
+    caption: str | None  # populated by future multimodal phase; None for Phase 0
+    # Structured form (Phase 1). May be None if parsing failed; raw_md is the fallback.
+    header: list[str] | None
+    rows: list[list[str]] | None
+
+
 # ---- Top-level State ----
 
 
@@ -70,6 +93,8 @@ class PaperState(TypedDict, total=False):
     parsed_markdown: str | None
     parsed_format: Literal["markdown", "latex"] | None
     parser_source: str | None  # origin tag, e.g. "arxiv-src:1706.03762"
+    figures: list[FigureAsset] | None  # set-once by parser_node; None if not parsed
+    tables: list[TableAsset] | None  # set-once by parser_node; None if not parsed
     summary: dict | None  # SummaryModel.model_dump()
 
     # ---- Storyboard ----
