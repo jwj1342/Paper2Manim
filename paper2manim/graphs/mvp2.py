@@ -337,9 +337,13 @@ def post_vlm_route(state: PaperState) -> Literal["visual_revise", "advance"]:
     if decision == "pass":
         return "advance"
     if decision == "fail":
-        # Treat as terminal — advance and record as skipped via the success/failure
-        # check in advance_scene_node (rendered video still gets included since
-        # the underlying render technically succeeded).
+        # Soft-fail policy (intentional): a "fail" verdict from the VLM is logged
+        # in trace.jsonl + last_visual_review but does NOT exclude the scene from
+        # rendered_videos — the render itself succeeded, and at this VLM
+        # maturity (Claude rarely self-passes, see docs/vlm_experiment.md) a
+        # strict-fail policy would frequently leave final/output.mp4 empty. If
+        # we ever want strict-fail, gate it on a CLI flag and have
+        # advance_scene_node consult last_visual_review.decision.
         return "advance"
     # decision == "revise"
     if state.get("vlm_revision_count", 0) >= state.get("max_visual_revisions", 2):
