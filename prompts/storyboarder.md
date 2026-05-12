@@ -48,7 +48,7 @@ Just build scenes from the structured summary as before. Leave `referenced_table
 - **MVP 1.0 (short text input):** generate exactly **1 scene** (15–30 seconds total).
 - **MVP 2.0 (structured summary input):** generate **2–5 scenes** for 60–120 seconds total. The first scene introduces the problem/title; the last scene summarizes the takeaway.
 - `name` must be PascalCase, alphanumeric, unique, and a valid Python class name.
-- `description` must describe **only what Manim can do**: text/equations fading in/out, simple shapes (Circle, Square, Line, Arrow, Axes, Graph), the `Table` mobject for paper tables, `Transform`, `Write`, `Create`, `FadeIn/Out`, basic camera motion. **Do not** describe photos, 3D scenes, sound, or video clips.
+- `description` must describe **only what Manim can do**: text/equations fading in/out, simple shapes (Circle, Square, Line, Arrow, Axes, Graph), the `Table` mobject for paper tables, `Transform`, `Write`, `Create`, `FadeIn/Out`, basic camera motion. **Do not** invent photos, 3D scenes, sound, or video clips out of thin air. **Exception**: when a paper figure is routed to a scene via `referenced_figures` (including `fig_type=photo` figures like dataset samples or generated outputs), the coder will embed the original image via `ImageMobject` — you should just route it and narrate around it; do not dictate the photo's content.
 - Be concrete: name the equations to render (in LaTeX), the colors, the order of appearance.
 - Keep scenes self-contained — each scene class will be rendered independently.
 - `duration_hint` is the expected runtime in seconds (1–60).

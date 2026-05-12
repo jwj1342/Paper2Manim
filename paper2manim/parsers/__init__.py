@@ -35,9 +35,20 @@ _LATEX_TABULAR_HEAD_RE = re.compile(r"\\begin\{tabular\}\s*(?:\[[^\]]*\])?\s*\{[
 _LATEX_NOISE_RE = re.compile(r"\\(?:hline|toprule|midrule|bottomrule|cline\{[^}]*\}|rule)\b")
 
 
+_ESCAPED_PIPE = "\x00ESC_PIPE\x00"  # sentinel that won't appear in real markdown
+
+
 def _split_md_row(line: str) -> list[str]:
-    """Split a markdown table row by `|`, dropping the empty edge cells."""
-    parts = [c.strip() for c in line.split("|")]
+    """Split a markdown table row by `|`, dropping the empty edge cells.
+
+    Handles escaped pipes (``\\|``) by replacing them with a sentinel before the
+    split and restoring them to literal ``|`` in each cell. NB: cells containing
+    raw ``|`` inside inline code spans (e.g. ``a | b``) are NOT correctly handled
+    — that would require a full markdown parser; in that case the caller should
+    fall back to ``raw_md``.
+    """
+    safe = line.replace(r"\|", _ESCAPED_PIPE)
+    parts = [c.strip().replace(_ESCAPED_PIPE, "|") for c in safe.split("|")]
     # `| a | b |` splits to ['', 'a', 'b', ''] — drop leading/trailing empties only
     if parts and parts[0] == "":
         parts = parts[1:]

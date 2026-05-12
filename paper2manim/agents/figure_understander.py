@@ -17,7 +17,6 @@ This node NEVER sets ``fatal_error`` — figure understanding is enrichment.
 from __future__ import annotations
 
 import logging
-import re
 from pathlib import Path
 from typing import Any
 
@@ -27,6 +26,7 @@ from paper2manim.artifacts import append_trace
 from paper2manim.prompts import load_prompt
 from paper2manim.schemas.figure import FigureUnderstanding
 from paper2manim.state import PaperState
+from paper2manim.utils.text_utils import extract_json_object
 from paper2manim.vlm import get_vlm
 
 log = logging.getLogger(__name__)
@@ -39,14 +39,19 @@ def _safe_parse_understanding(raw: Any) -> tuple[dict | None, dict | None]:
     - ``(None, None)`` — couldn't even parse the response
     - ``(semantics, None)`` — classification OK; recipe missing/invalid OR redrawable=False
     - ``(semantics, recipe)`` — full understanding
+
+    Uses ``extract_json_object`` (which prefers strict json.loads and only falls
+    back to outer-brace bounds when needed) instead of a greedy regex that
+    would over-match when the VLM wraps the response in prose or code fences.
     """
     text = raw if isinstance(raw, str) else str(raw)
-    # Strip code fences / surrounding prose: grab the first {...} block
-    m = re.search(r"\{.*\}", text, re.DOTALL)
-    if not m:
+    try:
+        obj = extract_json_object(text)
+    except (ValueError, Exception) as exc:  # noqa: BLE001 — JSON shape is unknown
+        log.warning("[figure_understander] JSON extraction failed: %s", str(exc)[:200])
         return None, None
     try:
-        parsed = FigureUnderstanding.model_validate_json(m.group(0))
+        parsed = FigureUnderstanding.model_validate(obj)
     except ValidationError as exc:
         log.warning("[figure_understander] schema validation failed: %s", str(exc)[:200])
         return None, None

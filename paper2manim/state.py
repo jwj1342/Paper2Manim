@@ -13,10 +13,14 @@ from typing import Annotated, Literal, TypedDict
 # ---- Substructures (TypedDict mirror of pydantic schemas) ----
 
 
-class Scene(TypedDict):
+class Scene(TypedDict, total=False):
     name: str
     description: str
     duration_hint: float
+    # Optional routing fields populated by the storyboarder LLM via SceneModel.
+    # Mirror SceneModel in paper2manim/schemas/storyboard.py — keep the two in sync.
+    referenced_tables: list[str]
+    referenced_figures: list[str]
 
 
 class Storyboard(TypedDict):

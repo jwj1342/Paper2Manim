@@ -137,6 +137,15 @@ def test_md_table_structure_with_alignment_separator():
     assert rows == [["foo", "1"]]
 
 
+def test_md_table_structure_handles_escaped_pipes():
+    """A cell containing `\\|` (literal pipe) must not be split across columns."""
+    raw = "| name | regex |\n|------|-------|\n| pipe-or | a\\|b |\n"
+    header, rows = _parse_md_table_structure(raw)
+    assert header == ["name", "regex"]
+    # Escaped pipe should remain a literal `|` inside the single cell, not split.
+    assert rows == [["pipe-or", "a|b"]]
+
+
 def test_latex_table_structure_basic():
     raw = r"""\begin{tabular}{lcc}
 \hline
