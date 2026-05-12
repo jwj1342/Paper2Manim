@@ -14,7 +14,6 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-
 FigType = Literal[
     "schematic",  # architecture / pipeline / flow diagram
     "chart",  # plot with axes (loss curve, bar chart, scaling law)

@@ -70,8 +70,10 @@ def _format_table_manifest(tables: list[dict]) -> str:
             line = f"- {tab_id} [{fmt}] header=[{head_str}] n_rows={n_rows}"
             if rows:
                 first = rows[0]
+                # strict=False: malformed tables may have shorter rows; truncate to
+                # the shared prefix rather than crashing in a manifest-preview path.
                 preview = ", ".join(
-                    f"{h}={v}" for h, v in zip(header, first)
+                    f"{h}={v}" for h, v in zip(header, first, strict=False)
                 )
                 line += f"\n    first_row: {preview}"
         else:

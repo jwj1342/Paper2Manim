@@ -6,9 +6,6 @@ All cases use MockVLMClient or monkeypatch get_vlm — no real VLM HTTP calls.
 from __future__ import annotations
 
 import json
-from pathlib import Path
-
-import pytest
 
 from paper2manim.agents.figure_understander import (
     _safe_parse_understanding,

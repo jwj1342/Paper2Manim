@@ -12,7 +12,6 @@ from paper2manim.parsers import (
     _parse_md_table_structure,
 )
 
-
 # ---- markdown tables --------------------------------------------------------
 
 def test_md_table_extraction_basic():
