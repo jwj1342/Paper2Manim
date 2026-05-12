@@ -17,6 +17,11 @@ class ModelConfig:
     timeout: int = 600
     supports_vision: bool = False
     supports_thinking: bool = False
+    # "header_api_key" sends Authorization the way each SDK defaults to:
+    # OpenAI-compatible -> Bearer (in OpenAI SDK), Anthropic -> x-api-key.
+    # "bearer" forces Authorization: Bearer <key> via default_headers — required
+    # for Azure-hosted Claude on the Anthropic Messages endpoint.
+    auth_style: str = "header_api_key"
 
     @classmethod
     def from_dict(cls, value: dict[str, Any]) -> ModelConfig:
@@ -34,6 +39,7 @@ class ModelConfig:
             timeout=_int(value.get("timeout"), 600),
             supports_vision=bool(value.get("supports_vision", False)),
             supports_thinking=bool(value.get("supports_thinking", False)),
+            auth_style=str(value.get("auth_style") or "header_api_key").strip(),
         )
 
     def __repr__(self) -> str:
@@ -41,7 +47,8 @@ class ModelConfig:
             f"ModelConfig(name={self.name!r}, provider={self.provider!r}, "
             f"model={self.model!r}, base_url={self.base_url!r}, "
             f"supports_vision={self.supports_vision}, "
-            f"supports_thinking={self.supports_thinking})"
+            f"supports_thinking={self.supports_thinking}, "
+            f"auth_style={self.auth_style!r})"
         )
 
 

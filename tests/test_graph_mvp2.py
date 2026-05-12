@@ -35,7 +35,7 @@ def stub_pipeline(monkeypatch):
 
     llm = MagicMock()
 
-    def with_structured_output(model_cls):
+    def with_structured_output(model_cls, **_kwargs):
         if model_cls.__name__ == "SummaryModel":
             return summarizer_struct
         if model_cls.__name__ == "StoryboardModel":

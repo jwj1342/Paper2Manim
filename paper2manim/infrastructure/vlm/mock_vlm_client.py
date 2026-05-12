@@ -1,43 +1,70 @@
+"""Mock VLM client for unit tests — returns deterministic 6-dim JSON."""
+
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
-from paper2manim.infrastructure.vlm.client import VLMClient
 
+class MockVLMClient:
+    """Returns a canned 6-dim review.
 
-class MockVLMClient(VLMClient):
-    def __init__(self, result: str | None = None) -> None:
-        self.result = result or _default_pass()
+    ``scripted`` overrides specific scene IDs with their own decision/scores.
+    Anything not in ``scripted`` falls back to ``default_decision``.
+    """
 
-    def review_images(
+    def __init__(
         self,
-        prompt: str,
-        image_paths: list[Path],
         *,
-        response_format: str = "json",
-    ) -> str:
-        return self.result
+        default_decision: str = "pass",
+        default_score: int = 4,
+        scripted: dict[str, dict] | None = None,
+    ) -> None:
+        self.default_decision = default_decision
+        self.default_score = default_score
+        self.scripted = scripted or {}
+        self.calls: list[tuple[str, str]] = []
 
     def review_scene(self, prompt: str, image_path: str | Path) -> str:
-        return self.result
+        self.calls.append((prompt[:80], str(image_path)))
+        scene_id = _extract_scene_id(prompt)
+        scripted = self.scripted.get(scene_id, {})
+        decision = scripted.get("decision", self.default_decision)
+        score = scripted.get("score", self.default_score)
+        return json.dumps(
+            {
+                "scene_id": scene_id,
+                "decision": decision,
+                "scores": {
+                    "paper_alignment": score,
+                    "visual_clarity": score,
+                    "readability": score,
+                    "layout_balance": score,
+                    "visual_focus": score,
+                    "animation_perceived": score,
+                },
+                "issues": scripted.get("issues", []),
+                "paper_alignment_notes": scripted.get("notes", "mock"),
+                "revision_instruction": scripted.get(
+                    "revision_instruction",
+                    "" if decision == "pass" else "Increase font size and reduce overlap.",
+                ),
+                "requires_replanning": False,
+            }
+        )
 
 
-def _default_pass() -> str:
-    return (
-        "{\n"
-        "  \"scene_id\": \"scene_mock\",\n"
-        "  \"decision\": \"pass\",\n"
-        "  \"scores\": {\n"
-        "    \"paper_alignment\": 4,\n"
-        "    \"visual_clarity\": 4,\n"
-        "    \"readability\": 4,\n"
-        "    \"layout_balance\": 4,\n"
-        "    \"visual_focus\": 4,\n"
-        "    \"animation_perceived\": 4\n"
-        "  },\n"
-        "  \"issues\": [],\n"
-        "  \"paper_alignment_notes\": \"Looks aligned.\",\n"
-        "  \"revision_instruction\": \"\",\n"
-        "  \"requires_replanning\": false\n"
-        "}"
-    )
+def _extract_scene_id(prompt: str) -> str:
+    """Best-effort scrape of ``"scene_id": "..."`` from the inlined SceneSpec JSON."""
+    needle = '"scene_id"'
+    idx = prompt.find(needle)
+    if idx < 0:
+        return "unknown"
+    rest = prompt[idx + len(needle):]
+    q1 = rest.find('"')
+    if q1 < 0:
+        return "unknown"
+    q2 = rest.find('"', q1 + 1)
+    if q2 < 0:
+        return "unknown"
+    return rest[q1 + 1 : q2]

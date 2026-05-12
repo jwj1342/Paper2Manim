@@ -1,72 +1,71 @@
 # Paper2Manim multi-provider model registry
 # -----------------------------------------------------------------------------
 # Copy this file to `config.yaml` (gitignored) and fill in your API keys.
-# Keys can be inlined (e.g. `api_key: sk-...`) or reference environment
-# variables with `$VAR_NAME`, which will be resolved at load time.
+# api_key values can be inlined or reference env vars with `$VAR_NAME`
+# (resolved at load time).
 #
-# Adopted from collaborator's fix/api-client-config branch (issue #1, D3).
+# provider:      "openai_compatible" (OpenAI-style /chat/completions) | "anthropic"
+# auth_style:    "header_api_key" (default; SDK picks Bearer for openai, x-api-key for anthropic)
+#                | "bearer"       (force Authorization: Bearer — required for Azure-hosted Claude)
+# supports_vision / supports_thinking: declared capabilities used by the LLM/VLM factory.
 # -----------------------------------------------------------------------------
 
 models:
-  # MiMo (Xiaomi Token Plan) — OpenAI-compatible, text-only.
-  # Used as the default for storyboarder / coder / reviewer in main.
-  - name: mimo-v2.5
-    display_name: MiMo V2.5
-    provider: openai_compatible
-    model: mimo-v2.5
-    api_key: $MIMO_API_KEY
-    base_url: https://token-plan-cn.xiaomimimo.com/v1
+  # Text-only chat model (storyboarder / coder / reviewer / summarizer).
+  # Example provider lines kept commented — fill in for your stack.
+  - name: text-flash
+    display_name: Text Model (flash tier)
+    provider: openai_compatible          # or: anthropic
+    model: ""                            # e.g. mimo-v2.5 / deepseek-chat / gpt-4o-mini
+    api_key: $TEXT_FLASH_API_KEY
+    base_url: ""                         # e.g. https://api.openai.com/v1
     temperature: 0.2
     max_tokens: 8192
     timeout: 120
     supports_vision: false
     supports_thinking: false
+    # auth_style: header_api_key
 
-  - name: mimo-v2.5-pro
-    display_name: MiMo V2.5 Pro
+  - name: text-pro
+    display_name: Text Model (pro / long context)
     provider: openai_compatible
-    model: mimo-v2.5-pro
-    api_key: $MIMO_API_KEY
-    base_url: https://token-plan-cn.xiaomimimo.com/v1
-    temperature: 0.2
-    max_tokens: 8192
-    timeout: 120
-    supports_vision: false
-    supports_thinking: false
-
-  # DeepSeek V4 Pro — OpenAI-compatible, with reasoning support.
-  - name: deepseek-v4-pro
-    display_name: DeepSeek V4 Pro
-    provider: openai_compatible
-    model: deepseek-v4-pro
-    api_key: $DEEPSEEK_API_KEY
-    base_url: https://api.deepseek.com/v1
+    model: ""                            # e.g. mimo-v2.5-pro
+    api_key: $TEXT_PRO_API_KEY
+    base_url: ""
     temperature: 0.2
     max_tokens: 8192
     timeout: 600
     supports_vision: false
-    supports_thinking: true
+    supports_thinking: false
 
-  # Vision-capable model (placeholder) — used for VLM scene review (MVP 3.0).
-  # Configure to your preferred vision model and provider.
+  # Vision-capable model (VLM scene reviewer + visual revision).
+  # supports_vision: true is REQUIRED — get_vlm() will reject this otherwise.
   - name: vision-model
-    display_name: Vision Checker
-    provider: openai_compatible
-    model: your-vision-model-name
+    display_name: Vision Reviewer
+    provider: openai_compatible          # or: anthropic
+    model: ""                            # e.g. doubao-seed-2-0-pro-260215 / claude-sonnet-4-6-1
     api_key: $VISION_API_KEY
-    base_url: https://example.com/v1
+    base_url: ""                         # e.g. https://ark.cn-beijing.volces.com/api/v3
     temperature: 0.0
     max_tokens: 4096
-    timeout: 600
+    timeout: 120
     supports_vision: true
     supports_thinking: false
+    # auth_style: bearer                 # uncomment for Azure-hosted Claude
 
-# Role-to-model mapping. Each role names which model to use.
+# Role-to-model mapping. Canonical roles consumed by the LangGraph nodes.
 model_roles:
-  global_reader: mimo-v2.5-pro
-  scene_planner: mimo-v2.5
-  scene_coder: mimo-v2.5
-  render_fixer: mimo-v2.5
-  visual_reviser: mimo-v2.5
+  global_reader: text-pro
+  scene_planner: text-flash
+  scene_coder: text-flash
+  render_fixer: text-flash
+  visual_reviser: text-flash
+  final_summarizer: text-pro
   vision_checker: vision-model
-  final_summarizer: mimo-v2.5-pro
+
+# VLM Multi-Dim Scoring loop knobs (consumed by graphs/mvp2.py).
+vlm_review:
+  enabled: true                          # set false to bypass the visual loop entirely
+  max_revisions_per_scene: 2             # how many revise→re-render cycles before advance
+  frame_sample_count: 4                  # how many frames to montage per scene
+  strict_fail_advances: false            # if true, decision=fail advances and records skipped

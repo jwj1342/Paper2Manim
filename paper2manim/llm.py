@@ -1,252 +1,325 @@
-"""Multi-provider LLM client factory — thin wrapper over langchain-openai.ChatOpenAI.
+"""Chat-model factory routed by YAML config (or MiMo env fallback).
 
-Each provider exposes an OpenAI-compatible /chat/completions endpoint, so a single
-``ChatOpenAI`` instance can target any of them by varying ``base_url`` and ``model``.
-The provider for the current process is resolved once from ``Settings.LLM_PROVIDER``
-(or auto-detected from whichever ``*_API_KEY`` is set), and ``get_llm(role)`` builds
-clients on demand.
+Two layers, picked at call time:
 
-The role layer (``flash`` / ``pro``) is kept for backwards compatibility with the
-4 production agents (storyboarder / coder / summarizer / reviewer). Per-role model
-overrides live in ``LLM_MODEL_FLASH`` / ``LLM_MODEL_PRO``.
+1. **YAML-driven (preferred)** — if ``<project_root>/config.yaml`` exists, model
+   definitions and role→model bindings come from there via
+   :func:`paper2manim.config.config_loader.load_model_settings`. Canonical role
+   names match :data:`CANONICAL_ROLES` and are referenced both by graph nodes
+   and by ``model_roles:`` keys in YAML.
 
-Vision capability is declared per provider via ``supports_vision``. Callers that
-require an image-capable client (future ``vlm_scene_reviewer`` integration) should
-pass ``require_vision=True`` — mis-configured providers raise at construction time
-rather than failing mid-graph.
+2. **MiMo env fallback (legacy)** — if no ``config.yaml`` is present, build a
+   MiMo ``ChatOpenAI`` from ``.env`` (``MIMO_API_KEY``). Legacy aliases
+   ``flash`` / ``pro`` / ``v2`` / ``v2-omni`` still work for backwards
+   compatibility with the existing agents.
+
+``get_vlm()`` is YAML-only — it requires a model with ``supports_vision=true``
+bound to the ``vision_checker`` role.
 """
 
 from __future__ import annotations
 
 import logging
 from collections.abc import Sequence
-from typing import Any, Literal, TypeVar
+from functools import lru_cache
+from typing import Any, TypeVar
 
 from langchain_core.exceptions import OutputParserException
+from langchain_core.language_models import BaseChatModel
 from langchain_openai import ChatOpenAI
 from pydantic import BaseModel, ValidationError
 
-from paper2manim.config import get_settings
+from paper2manim.config import PROJECT_ROOT, get_settings
+from paper2manim.config.config_loader import load_model_settings
+from paper2manim.config.model_config import ModelConfig, ModelSettings
 
 log = logging.getLogger(__name__)
 _T = TypeVar("_T", bound=BaseModel)
 
-Role = Literal["flash", "pro"]
+CANONICAL_ROLES: tuple[str, ...] = (
+    "global_reader",
+    "scene_planner",
+    "scene_coder",
+    "render_fixer",
+    "final_summarizer",
+    "visual_reviser",
+    "vision_checker",
+)
 
-# Provider registry. ``flash``/``pro`` give a default model id per role; if the
-# value is ``None`` we resolve it lazily (currently only doubao, which reads
-# ``Settings.VLM_MODEL`` so users with a pre-existing Volcengine setup don't have
-# to duplicate the value). ``key_envs`` is the ordered fallback chain of
-# ``Settings`` attributes consulted when ``LLM_API_KEY`` is not set.
-PROVIDER_TABLE: dict[str, dict[str, Any]] = {
-    "mimo": {
-        "base_url": "https://token-plan-cn.xiaomimimo.com/v1",
-        "flash": "mimo-v2.5",
-        "pro": "mimo-v2.5-pro",
-        "supports_vision": False,
-        "key_envs": ("MIMO_API_KEY",),
-    },
-    "deepseek": {
-        "base_url": "https://api.deepseek.com/v1",
-        "flash": "deepseek-chat",
-        "pro": "deepseek-reasoner",
-        "supports_vision": False,
-        "key_envs": ("DEEPSEEK_API_KEY",),
-    },
-    "doubao": {
-        "base_url": "https://ark.cn-beijing.volces.com/api/v3",
-        "flash": None,  # resolved from settings.VLM_MODEL at call time
-        "pro": None,
-        "supports_vision": True,
-        "key_envs": ("DOUBAO_API_KEY", "VLM_API_KEY"),
-    },
-    "openai": {
-        "base_url": "https://api.openai.com/v1",
-        "flash": "gpt-4o-mini",
-        "pro": "gpt-4o",
-        "supports_vision": True,
-        "key_envs": ("OPENAI_API_KEY",),
-    },
+# Legacy aliases used by agents pre-YAML; map onto canonical roles so older
+# agent code keeps working without a rewrite.
+_LEGACY_ALIAS_TO_ROLE: dict[str, str] = {
+    "flash": "scene_coder",
+    "pro": "final_summarizer",
+    "v2": "scene_coder",
+    "v2-omni": "scene_coder",
 }
 
-# Auto-detect order: first non-empty *_API_KEY wins when LLM_PROVIDER is unset.
-_AUTODETECT_ORDER = ("mimo", "deepseek", "doubao", "openai")
+_CONFIG_PATH = PROJECT_ROOT / "config.yaml"
+
+# Fallback model map for MiMo env mode. Keys cover both legacy aliases and
+# canonical roles so the same agent code paths resolve in either mode.
+_MIMO_FALLBACK_MODEL: dict[str, str] = {
+    "flash": "mimo-v2.5",
+    "pro": "mimo-v2.5-pro",
+    "v2": "mimo-v2-pro",
+    "v2-omni": "mimo-v2-omni",
+    "global_reader": "mimo-v2.5-pro",
+    "scene_planner": "mimo-v2.5",
+    "scene_coder": "mimo-v2.5",
+    "render_fixer": "mimo-v2.5",
+    "final_summarizer": "mimo-v2.5-pro",
+    "visual_reviser": "mimo-v2.5",
+}
 
 
-def _resolve_provider() -> str:
-    s = get_settings()
-    explicit = (s.LLM_PROVIDER or "").strip().lower()
-    if explicit:
-        if explicit not in PROVIDER_TABLE:
-            raise RuntimeError(
-                f"Unknown LLM_PROVIDER '{explicit}'. "
-                f"Choose one of: {', '.join(sorted(PROVIDER_TABLE))}."
-            )
-        return explicit
-    # Auto-detect: pick whichever provider has at least one key set.
-    for name in _AUTODETECT_ORDER:
-        if _resolve_key_for(name)[0]:
-            return name
+def _seed_env_from_dotenv() -> None:
+    """Make $VAR references inside config.yaml resolvable.
+
+    pydantic-settings only injects fields it explicitly declares; anything else
+    in ``.env`` (e.g. ``AZURE_CLAUDE_API_KEY``) is ignored. The YAML loader,
+    however, reads ``os.environ`` directly. This shim copies any unseen keys
+    from ``.env`` into the process env without clobbering already-set values.
+    """
+    import os
+    dotenv = PROJECT_ROOT / ".env"
+    if not dotenv.exists():
+        return
+    for line in dotenv.read_text(encoding="utf-8").splitlines():
+        s = line.strip()
+        if not s or s.startswith("#") or "=" not in s:
+            continue
+        k, v = s.split("=", 1)
+        k = k.strip()
+        v = v.strip().strip('"').strip("'")
+        os.environ.setdefault(k, v)
+
+
+@lru_cache(maxsize=1)
+def _yaml_settings() -> ModelSettings | None:
+    if not _CONFIG_PATH.exists():
+        return None
+    _seed_env_from_dotenv()
+    try:
+        return load_model_settings(_CONFIG_PATH)
+    except Exception as exc:
+        log.warning("[llm] config.yaml present but unloadable: %s", exc)
+        return None
+
+
+def reload_config() -> None:
+    """Drop the cached :class:`ModelSettings` so the next call re-reads YAML."""
+    _yaml_settings.cache_clear()
+
+
+def _resolve_role(name: str) -> str:
+    return _LEGACY_ALIAS_TO_ROLE.get(name, name)
+
+
+def _build_yaml_client(
+    cfg: ModelConfig,
+    *,
+    temperature: float,
+    max_tokens: int,
+    timeout: float,
+    extra: dict[str, Any],
+) -> BaseChatModel:
+    """Materialize a langchain chat client from a :class:`ModelConfig`."""
+    if not cfg.api_key:
+        raise RuntimeError(
+            f"Model '{cfg.name}' has empty api_key — fill the $ENV_VAR referenced "
+            "by config.yaml or inline a key."
+        )
+    if cfg.provider == "openai_compatible":
+        return ChatOpenAI(
+            model=cfg.model,
+            api_key=cfg.api_key,
+            base_url=cfg.base_url,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            timeout=timeout,
+            **extra,
+        )
+    if cfg.provider == "anthropic":
+        # Imported lazily — langchain-anthropic is an optional dep until you
+        # actually point a role at an Anthropic model.
+        from langchain_anthropic import ChatAnthropic
+
+        kwargs: dict[str, Any] = {
+            "model": cfg.model,
+            "anthropic_api_url": cfg.base_url,
+            "anthropic_api_key": cfg.api_key,
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+            "timeout": timeout,
+        }
+        # Azure-hosted Claude uses Authorization: Bearer instead of the default
+        # x-api-key header; flip via default_headers when auth_style says so.
+        if cfg.auth_style == "bearer":
+            kwargs["default_headers"] = {
+                "Authorization": f"Bearer {cfg.api_key}",
+            }
+        kwargs.update(extra)
+        return ChatAnthropic(**kwargs)
     raise RuntimeError(
-        "No LLM provider configured. Set LLM_PROVIDER and one of "
-        f"{', '.join(sorted(set(env for p in PROVIDER_TABLE.values() for env in p['key_envs'])))} "
-        "in .env (or copy from .env.example)."
+        f"Unsupported provider '{cfg.provider}' on model '{cfg.name}'. "
+        "Choose 'openai_compatible' or 'anthropic'."
     )
 
 
-def _resolve_key_for(provider: str) -> tuple[str, str]:
-    """Return ``(key, source_env_name)`` for the given provider; key is empty if unset."""
-    s = get_settings()
-    # Generic LLM_API_KEY beats provider-specific
-    generic = (s.LLM_API_KEY or "").strip()
-    if generic:
-        return generic, "LLM_API_KEY"
-    for env in PROVIDER_TABLE[provider]["key_envs"]:
-        value = (getattr(s, env, "") or "").strip()
-        if value:
-            return value, env
-    return "", ""
-
-
-def _resolve_model_for(provider: str, role: Role) -> str:
-    s = get_settings()
-    override = (
-        s.LLM_MODEL_FLASH if role == "flash" else s.LLM_MODEL_PRO
-    ).strip()
-    if override:
-        return override
-    default = PROVIDER_TABLE[provider][role]
-    if default is None:
-        # doubao currently — fall back to VLM_MODEL when set
-        if provider == "doubao":
-            fallback = (s.VLM_MODEL or "").strip()
-            if fallback:
-                return fallback
-        raise RuntimeError(
-            f"No default model for provider '{provider}' role '{role}'. "
-            f"Set LLM_MODEL_{role.upper()} or VLM_MODEL in .env."
+def _build_mimo_fallback(
+    role_or_alias: str,
+    *,
+    temperature: float,
+    max_tokens: int,
+    timeout: float,
+    extra: dict[str, Any],
+) -> ChatOpenAI:
+    if role_or_alias not in _MIMO_FALLBACK_MODEL:
+        raise ValueError(
+            f"Unknown model alias / role '{role_or_alias}'. Either copy "
+            "config.example.yaml to config.yaml or use a known alias "
+            f"({', '.join(sorted(_MIMO_FALLBACK_MODEL))})."
         )
-    return default
-
-
-def _resolve_base_url(provider: str) -> str:
     s = get_settings()
-    override = (s.LLM_BASE_URL or "").strip()
-    if override:
-        return override
-    # provider=doubao: also accept legacy VLM_BASE_URL when LLM_BASE_URL unset
-    if provider == "doubao":
-        vlm_url = (s.VLM_BASE_URL or "").strip()
-        if vlm_url:
-            return vlm_url
-    return PROVIDER_TABLE[provider]["base_url"]
+    if not s.MIMO_API_KEY:
+        raise RuntimeError(
+            "No config.yaml found and MIMO_API_KEY is empty. Either create "
+            "config.yaml (copy config.example.yaml) or fill MIMO_API_KEY in .env."
+        )
+    return ChatOpenAI(
+        model=_MIMO_FALLBACK_MODEL[role_or_alias],
+        api_key=s.MIMO_API_KEY,
+        base_url=s.MIMO_BASE_URL,
+        temperature=temperature,
+        max_tokens=max_tokens,
+        timeout=timeout,
+        **extra,
+    )
 
 
 def get_llm(
-    role: Role = "flash",
+    model: str = "flash",
     *,
-    require_vision: bool = False,
     temperature: float = 0.2,
     max_tokens: int = 8192,
     timeout: float = 120,
     **kwargs,
-) -> ChatOpenAI:
-    """Build a ChatOpenAI client targeting the configured provider.
-
-    Parameters
-    ----------
-    role : "flash" | "pro"
-        Selects the per-role model id from ``PROVIDER_TABLE`` or
-        ``LLM_MODEL_FLASH``/``LLM_MODEL_PRO`` overrides.
-    require_vision : bool
-        If True, raise when the resolved provider does not declare
-        ``supports_vision=True``. Use this from agents that pass image inputs.
-
-    Examples
-    --------
-    >>> get_llm("flash").invoke("hi").content
-    >>> get_llm("pro").with_structured_output(MyPydanticModel).invoke([("system", ...), ("user", ...)])
-    """
-    if role not in ("flash", "pro"):
-        raise ValueError(f"Unknown role '{role}'. Choose 'flash' or 'pro'.")
-    provider = _resolve_provider()
-    if require_vision and not PROVIDER_TABLE[provider]["supports_vision"]:
-        vision_options = [
-            name for name, cfg in PROVIDER_TABLE.items() if cfg["supports_vision"]
-        ]
-        raise RuntimeError(
-            f"Role '{role}' on provider '{provider}' is text-only "
-            f"(supports_vision=False). Set LLM_PROVIDER to one of: "
-            f"{', '.join(sorted(vision_options))}."
+) -> BaseChatModel:
+    """Return a chat client for ``model`` (role name or legacy alias)."""
+    role = _resolve_role(model)
+    settings = _yaml_settings()
+    if settings is None:
+        return _build_mimo_fallback(
+            model,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            timeout=timeout,
+            extra=kwargs,
         )
-    api_key, key_source = _resolve_key_for(provider)
-    if not api_key:
-        envs = " or ".join(PROVIDER_TABLE[provider]["key_envs"])
+    try:
+        cfg = settings.model_for_role(role)
+    except KeyError as exc:
         raise RuntimeError(
-            f"No API key for provider '{provider}'. "
-            f"Set LLM_API_KEY or {envs} in .env."
-        )
-    base_url = _resolve_base_url(provider)
-    model = _resolve_model_for(provider, role)
-    log.debug(
-        "[llm] provider=%s role=%s model=%s base_url=%s key_source=%s",
-        provider, role, model, base_url, key_source,
-    )
-    return ChatOpenAI(
-        model=model,
-        api_key=api_key,
-        base_url=base_url,
+            f"config.yaml has no model bound to role '{role}'. {exc}"
+        ) from exc
+    return _build_yaml_client(
+        cfg,
         temperature=temperature,
         max_tokens=max_tokens,
         timeout=timeout,
-        **kwargs,
+        extra=kwargs,
     )
 
 
-def is_vision_capable(role: Role = "flash") -> bool:
-    """Return True iff the configured provider declares ``supports_vision``.
-
-    ``role`` is accepted for symmetry with ``get_llm`` but currently unused —
-    capability is a provider-level property.
-    """
-    del role  # currently provider-wide; reserved for future per-role capability
-    return PROVIDER_TABLE[_resolve_provider()]["supports_vision"]
+def get_vlm(
+    *,
+    role: str = "vision_checker",
+    temperature: float = 0.0,
+    max_tokens: int = 4096,
+    timeout: float = 120,
+    **kwargs,
+) -> BaseChatModel:
+    """Return a vision-capable chat client. Raises if no such model is configured."""
+    settings = _yaml_settings()
+    if settings is None:
+        raise RuntimeError(
+            "get_vlm() needs config.yaml with a supports_vision=true model "
+            f"bound to role '{role}'. No config.yaml found."
+        )
+    try:
+        cfg = settings.model_for_role(role)
+    except KeyError as exc:
+        raise RuntimeError(
+            f"config.yaml has no model bound to role '{role}'. {exc}"
+        ) from exc
+    if not cfg.supports_vision:
+        raise RuntimeError(
+            f"Model '{cfg.name}' bound to role '{role}' has supports_vision=false; "
+            "point the role at a vision-capable model."
+        )
+    return _build_yaml_client(
+        cfg,
+        temperature=temperature,
+        max_tokens=max_tokens,
+        timeout=timeout,
+        extra=kwargs,
+    )
 
 
 def current_provider() -> str:
-    """Return the resolved provider name (auto-detected if LLM_PROVIDER unset)."""
-    return _resolve_provider()
+    """Return the YAML provider for ``scene_coder`` role, or 'mimo' in fallback."""
+    s = _yaml_settings()
+    if s is None:
+        return "mimo"
+    try:
+        return s.model_for_role("scene_coder").provider
+    except KeyError:
+        return "<unbound>"
 
 
-def current_model(role: Role = "flash") -> str:
-    """Return the resolved model id for the given role under the current provider."""
-    return _resolve_model_for(_resolve_provider(), role)
+def current_model(model: str = "flash") -> str:
+    role = _resolve_role(model)
+    s = _yaml_settings()
+    if s is None:
+        return _MIMO_FALLBACK_MODEL.get(model, _MIMO_FALLBACK_MODEL.get(role, "?"))
+    try:
+        return s.model_for_role(role).model
+    except KeyError:
+        return "<unbound>"
 
 
-def current_key_source() -> str:
-    """Return the env variable name actually providing the API key, or '' if none."""
-    return _resolve_key_for(_resolve_provider())[1]
+def is_vision_capable(model: str = "vision_checker") -> bool:
+    role = _resolve_role(model)
+    s = _yaml_settings()
+    if s is None:
+        return False
+    try:
+        return s.model_for_role(role).supports_vision
+    except KeyError:
+        return False
 
 
 def safe_structured_invoke(
-    llm: ChatOpenAI,
+    llm: BaseChatModel,
     model_cls: type[_T],
     messages: Sequence[tuple[str, str]],
     *,
     retries: int = 1,
 ) -> _T:
-    """Invoke ``llm.with_structured_output(model_cls)`` with one automatic retry on
-    schema/parse failures.
+    """``llm.with_structured_output(model_cls)`` with one auto-retry on parse fail.
 
-    Wraps the common pattern where an LLM occasionally returns commentary plus JSON,
-    or JSON that fails pydantic validation. We retry once with a strict reminder.
+    Uses ``method="function_calling"`` because Volcengine Ark (Doubao) rejects
+    ``response_format={"type":"json_schema"|"json_object"}``, while all four
+    supported provider styles (mimo / deepseek / doubao / openai / anthropic)
+    accept tool calling.
 
     Raises
     ------
     OutputParserException / ValidationError
         If both attempts fail; callers should catch and convert to ``fatal_error``.
     """
-    structured = llm.with_structured_output(model_cls)
+    structured = llm.with_structured_output(model_cls, method="function_calling")
     last_exc: Exception | None = None
     msgs: list[tuple[str, str]] = list(messages)
     for attempt in range(retries + 1):
