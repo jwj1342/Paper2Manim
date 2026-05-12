@@ -14,6 +14,9 @@ def _isolated_runs_dir(tmp_path, monkeypatch):
     runs = tmp_path / "runs"
     runs.mkdir()
     monkeypatch.setenv("PAPER2MANIM_RUNS_DIR", str(runs))
+    # Pin provider+key for deterministic test runs even when developer .env has
+    # other *_API_KEY values that would otherwise trigger auto-detect.
+    monkeypatch.setenv("LLM_PROVIDER", os.environ.get("LLM_PROVIDER", "mimo"))
     monkeypatch.setenv("MIMO_API_KEY", os.environ.get("MIMO_API_KEY", "tp-test-key"))
     # Force config reload
     from paper2manim import config

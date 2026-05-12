@@ -173,16 +173,32 @@ def mvp2(
 @cli.command()
 def info() -> None:
     """Print configuration and environment status."""
-    console.print(json.dumps({
-        "MIMO_BASE_URL": settings.MIMO_BASE_URL,
-        "MIMO_API_KEY_set": bool(settings.MIMO_API_KEY),
+    from paper2manim.llm import (
+        current_key_source,
+        current_model,
+        current_provider,
+        is_vision_capable,
+    )
+
+    payload: dict[str, object] = {
         "PAPER2MANIM_RUNS_DIR": str(settings.PAPER2MANIM_RUNS_DIR),
         "PAPER2MANIM_DEFAULT_MODEL": settings.PAPER2MANIM_DEFAULT_MODEL,
         "PAPER2MANIM_MAX_RETRIES": settings.PAPER2MANIM_MAX_RETRIES,
         "PAPER2MANIM_QUALITY": settings.PAPER2MANIM_QUALITY,
         "on_compute_node": _on_compute_node(),
         "SLURM_JOB_ID": os.environ.get("SLURM_JOB_ID"),
-    }, indent=2))
+    }
+    try:
+        provider = current_provider()
+        payload["LLM_PROVIDER"] = provider
+        payload["LLM_MODEL_FLASH"] = current_model("flash")
+        payload["LLM_MODEL_PRO"] = current_model("pro")
+        payload["supports_vision"] = is_vision_capable()
+        payload["key_source"] = current_key_source()
+    except RuntimeError as exc:
+        payload["LLM_PROVIDER"] = "<unconfigured>"
+        payload["llm_error"] = str(exc)
+    console.print(json.dumps(payload, indent=2))
 
 
 if __name__ == "__main__":
