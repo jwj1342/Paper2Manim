@@ -24,7 +24,7 @@
 
 我们的方案在已有反思架构（Reviewer-Coder loop）基础上引入两个关键组件：
 
-1. **情景记忆库（Episodic Memory Bank, EMB）**——一个外置的、可检索的知识库，存储每一条成功视频背后的 `<教学文本 → 视觉策略 → Manim 代码>` 三元组。
+1. **情景记忆库（Episodic Memory Bank, EMB）**——一个外置的、可检索的知识库，**双通道**沉淀：既存储成功视频背后的 `<教学文本 → 视觉策略 → Manim 代码>` 三元组作为**正向示例**，也存储反思过程中诊断出的失败模式与修复规则作为**负向规则**（详见阶段 4）。
 2. **视觉奖励模型（Vision-Language Reward Model, VLRM）**——一个强 VLM（GPT-4o / Gemini-1.5-Pro / Claude-4 Opus），扮演**自主裁判**角色，多维度评估渲染后的视频帧并给出诊断报告，是决定"哪些经验值得入库"的把关人。
 
 二者闭环作用：**生成 → 渲染 → VLM 打分 → 反思修改 → 再打分 → 高分入库**。随着记忆库扩充，下一轮同类任务的初版生成质量被检索增强直接拔高，反思轮数下降，Pass@1 攀升——形成可观测的"**进化曲线（Evolution Curve）**"。
@@ -68,13 +68,43 @@ Coder 接收 VLM 的诊断，**只改有问题的部分**（局部 patch，而�
 
 ### 阶段 4：记忆沉淀与自进化（Memory Consolidation & Self-Evolution）—— **核心创新**
 
-视频一旦通过阶段 3 的高分校验，系统执行**知识蒸馏**：
+阶段 3 收敛后系统执行**双通道知识蒸馏**：成功视频沉淀为正向示例（4a），反思过程中暴露的失败模式沉淀为负向规则（4b）。
+
+#### 4a：正向沉淀（Success Rationale Memory）
+
+视频一旦通过阶段 3 的高分校验，系统执行：
 
 1. 让 VLM 写一段"**High-Score Rationale**"——为什么这是个好视频（"用渐入动画让公式逐项浮现，避免了一次性堆叠的视觉压力"）。
 2. 打包 `<Input Text, Rationale, Final Code, VLM Final Score, 关键帧 hash>` 写入 EMB，同时建立 embedding 索引。
 3. 下一次同类任务到来时，阶段 1 的检索直接召回这条记忆，初版代码质量被"喂答案"般拔高。
 
-**进化效应**：随着任务量累积，平均反思轮数应当**单调下降**，Pass@1 应当**单调上升**。我们把这条曲线作为本工作的**核心实验图（Hero Plot）**。
+#### 4b：负向沉淀（Failure Pattern Memory）
+
+仅靠正向沉淀有一个盲区：**反思 loop 在收敛过程中产生的负向信号被完全丢弃**。VLM 报告的每一个具体诊断（"`MathTex` 与 `Axes` 原点重叠"、"动画过渡 0.3s 太快观众跟不上"）、Reviewer 抓到的每一个 traceback（"`set_stroke()` got unexpected keyword `dash_pattern`"），都是"未来不该再犯"的可复用知识——目前 run 结束就蒸发。
+
+我们把这些反思事件**追溯到代码层级**（具体的 Mobject、API 调用、或视觉症状），蒸馏成 "**Lesson**" 形态的结构化规则：
+
+```json
+{
+  "lesson_id": "L0042",
+  "trigger_pattern": "scene contains Axes + Text positioned at default ORIGIN",
+  "root_cause": "default Text placement collides with Axes origin",
+  "fix_recipe": "use .next_to(axes, UP, buff=0.5) or explicit .move_to() away from origin",
+  "code_anti_example": "Text('label')",
+  "code_good_example": "Text('label').next_to(axes, UP, buff=0.5)",
+  "tags": ["layout", "axes", "occlusion"],
+  "source_runs": ["run_20260512_..."],
+  "hit_count": 1
+}
+```
+
+在下一轮任务的代码生成**前**（阶段 1 的检索环节），系统按当前 scene 描述 + 上一轮（若有）失败上下文检索 top-k 相关 Lesson，作为约束规则注入 Coder prompt 的 "Known pitfalls" 段。
+
+**与 4a 的范式差别**：正向沉淀产出**自然语言 Rationale + 完整代码示例**，靠 in-context 软约束；失败沉淀产出**结构化规则**，作为硬约束注入 prompt。两路信号正交——**正向压缩"该怎么写"的探索空间，负向消解"不该怎么写"的重复试错**。
+
+#### 进化效应
+
+随着任务量累积，平均反思轮数应当**单调下降**，Pass@1 应当**单调上升**。我们把这条曲线作为本工作的**核心实验图（Hero Plot）**。4a 与 4b 是该曲线背后两条**独立可量化**的收敛驱动力——同一类错误被 Reviewer 发现一次后即**全局免疫**（4b 贡献），而不仅仅是"找到一个最像的过去成功案例"（4a 贡献）。
 
 ```
             ↑ Pass@1
@@ -198,6 +228,7 @@ Coder 接收 VLM 的诊断，**只改有问题的部分**（局部 patch，而�
 - **Ablation B**：去掉 VLM 反馈，仅用代码运行错误（退回阶段 2 的退化版本）——验证 VLM 信号的增量价值。
 - **Ablation C**：种子记忆数量 ∈ {0, 10, 50, 200}——验证冷启动门槛。
 - **Ablation D**：把 VLRM 换成更小的开源 VLM（如 Qwen-VL）——验证 RQ2 的鲁棒性。
+- **Ablation E**：双通道分离消融——分别关闭 4a（正向 Rationale Memory）和 4b（Failure Pattern Memory），量化两路信号各自的边际贡献。预期：两路独立关闭后反思轮数下降斜率均显著变缓但不归零，证明它们正交且互补；同时关闭则退化为 Ablation A。
 
 ---
 
@@ -220,7 +251,7 @@ Coder 接收 VLM 的诊断，**只改有问题的部分**（局部 patch，而�
 | Code2Video (2025) | ✅ (multi-agent) | ❌ (rule-based) | ❌ | ❌ |
 | manim-generator | ✅ (compile-error) | ❌ | ❌ | ❌ |
 | Voyager (Minecraft, NeurIPS'23) | ✅ | ❌ | ✅ (skill library) | 部分 |
-| **Ours** | ✅ | **✅** | **✅ (episodic memory)** | **✅ (核心指标)** |
+| **Ours** | ✅ | **✅** | **✅ (dual-channel: success rationale + failure patterns)** | **✅ (核心指标)** |
 
 我们与 Voyager 在"外部技能 / 记忆库"的思想上有共鸣，但 Voyager 在游戏环境内，奖励是规则化的稀疏信号；我们在多模态视觉创作任务上，奖励是 VLM 连续打分——这是更困难、也更接近真实"教学质量"的场景。
 
