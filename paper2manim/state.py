@@ -90,6 +90,18 @@ class PaperState(TypedDict, total=False):
     skipped_scenes: Annotated[list[str], operator.add]  # scene names that gave up after retries
     final_video_path: str | None
 
+    # ---- VLM Multi-Dim Scoring loop (MVP 3.0) ----
+    # `vlm_enabled` is a per-run toggle (set by CLI / build_mvp2_graph) that decides
+    # whether to insert frame_sampler + vlm_reviewer between render-success and advance.
+    # Counts and decisions are per-scene scoped (reset by init_scene_node when
+    # starting a new scene).
+    vlm_enabled: bool
+    vlm_revision_count: int  # how many visual revisions have run on the current scene
+    max_visual_revisions: int  # cap; advance once exceeded
+    visual_revision_decisions: Annotated[list[str], operator.add]
+    last_visual_review: dict | None  # the full review payload from vlm_scene_reviewer
+    current_montage_path: str | None  # latest frame montage produced for this scene
+
     # ---- Control flags ----
     # `fatal_error` is for graph-level fatal errors only (parser/summarizer/storyboarder/
     # missing-input failures). It triggers early exit to END. Do NOT use this for

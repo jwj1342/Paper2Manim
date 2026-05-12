@@ -1,26 +1,28 @@
 # Progress
 
-> 更新时间：2026-05-11（合入合作者 fix 分支 → arXiv 源码解析路径 → GitHub CI/CD + 分支保护）
+> 更新时间：2026-05-12（MVP 2.0 真实论文验收 → YAML 多 provider + 多模态标识 → MVP 3.0 阶段 2/3 VLM 接图 + 实验数据）
 
 ## 总览
 
 | 模块 | 状态 | 备注 |
 |---|---|---|
 | 项目骨架 | 完成 | pyproject / .env / .gitignore / README / docs |
-| 核心模块（state/llm/config/prompts/artifacts/cli） | 完成 | config 已包化（env.py + settings.py） |
+| 核心模块（state/llm/config/prompts/artifacts/cli） | 完成 | `llm.py` 走 YAML `config.yaml` → `ModelSettings` 路由，env-mimo 兜底 |
 | Sandbox（render/classify/concat） | 完成 | subprocess + rlimit + 静态预检（quality/manim_static_checker） |
 | MVP 1.0 agents（storyboarder, coder） | 完成 | 端到端验证通过 |
-| MVP 2.0 agents（summarizer, reviewer） | 完成 | 单测通过；待真实 PDF 验收 |
-| MVP 3.0 脚手架（VLM critic + visual revision） | 已合入 | 模块就位；尚未接入 graphs/mvp2.py |
-| Graphs（mvp1, mvp2） | 完成 | mvp2 含 should_retry / has_more_scenes 两个 conditional edges |
-| Prompts（8 个） | 完成 | 外置在 `prompts/*.md`，含 global_system 共享头 |
-| 多 provider 抽象（infrastructure/models, llm, vlm） | 合入待整合 | 与 main 的 `llm.py` 并存；后续在 D3 决议后统一 |
-| 测试 | 完成 | 46/46 单测；slow 标记的真实渲染冒烟测已规划 |
+| MVP 2.0 agents（summarizer, reviewer） | 完成 | 反思 cycle 单测 + 真实论文端到端验收均通过 |
+| MVP 3.0 阶段 2/3（VLM 多维评分接图） | 完成 | `agents/vlm_scene_reviewer` + `visual_revision_agent` + `utils/frame_sampler` 已接入 `graphs/mvp2.py`；CLI `--vlm` 开启；mock-VLM 闭环单测 4 条；真实实验数据见 `docs/vlm_experiment.md` |
+| MVP 3.0 阶段 4（EMB / 自进化） | 未启动 | 暂不考虑；保留 proposal §4 + §7 的描述作为未来工作锚点 |
+| Graphs（mvp1, mvp2） | 完成 | mvp2 新增 `frame_sampler → vlm_review → visual_revise` 闭环（cap=`max_visual_revisions`） |
+| Prompts | 完成 | 外置在 `prompts/*.md`，含 `vlm_scene_reviewer.md` + `visual_revision_agent.md` |
+| 多 provider + 多模态标识（YAML） | 完成 | `config.example.yaml` 模板（所有字段留空 + `$ENV_VAR` 引用）；`ModelConfig.supports_vision` / `auth_style` 字段；`get_llm(role)` + `get_vlm()` 双入口；`provider` ∈ {openai_compatible, anthropic}，anthropic 支持 bearer auth（Azure Claude） |
+| 测试 | 完成 | 50/50 单测（46 历史 + 4 新增 mock-VLM 闭环） |
 | 输入解析（arXiv 源码 + 本地 PDF 兜底） | 完成 | `parsers/arxiv_source.py` + 分派 `parsers/__init__.py`；18 条新单测；SourceUnavailable 自动回退 Marker |
 | CI/CD（GitHub Actions） | 完成 | `.github/workflows/ci.yml`（pytest + ruff, py3.11/3.12 matrix）+ `codeql.yml`（每周 + 每次 PR） |
 | 分支保护 + Dependabot | 完成 | main 强制 PR + 3 个 check 必过 + 禁 force push；Dependabot 周更 pip / 月更 actions |
 | 端到端验收（MVP 1.0） | 完成 | pythagorean 输入 → 10.47s mp4 |
-| 端到端验收（MVP 2.0） | 进行中 | 反思 cycle 单测已通过；待真实论文跑通 |
+| 端到端验收（MVP 2.0） | 完成 | arXiv `1706.03762 §Background` → 5 scenes 全成功 → concat 79.0s mp4 (`runs/20260512-213215-4d4572/`) |
+| 端到端验收（MVP 3.0 阶段 2/3） | 完成 | 同一输入 + `--vlm` → 5 scenes × 3 reviews（含 2 visual revisions）→ concat 69.1s mp4 (`runs/20260512-221822-08f182/`)；评分趋势见 `docs/vlm_experiment.md` |
 
 ---
 
@@ -141,13 +143,7 @@
 
 ## In Progress
 
-### MVP 2.0 真实论文验收
-- 安装 `marker-pdf` + 预下载 ~3GB 模型权重（首次自动）
-- 准备一篇真实论文 PDF（候选：Attention Is All You Need 的 Section 3 摘出来约 5 页 PDF）
-- 端到端跑通 `paper2manim mvp2 --pdf <path>`，确认：
-  - 反思 cycle 在真实场景下能触发并修复
-  - concat 出来的多 scene mp4 可播放
-  - `runs/<id>/trace.jsonl` 完整记录
+（无 — MVP 2.0 真实论文验收完成；MVP 3.0 阶段 2/3 VLM 接图完成；阶段 4 EMB 暂不启动。）
 
 ---
 
@@ -155,8 +151,8 @@
 
 ### A. MVP 2.0 收尾（短期）
 - [x] **arXiv 源码路径**（方案 C）：`paper2manim/parsers/arxiv_source.py` + 分派 `parsers/__init__.py`；CLI 加 `--arxiv <id|url>` / `--section <name>`；state 增 `input_kind="arxiv"` + `arxiv_spec` / `arxiv_section` / `parsed_format` / `parser_source`；summarizer prompt 增加 LaTeX 输入分支；18 条新单测（id 解析 / flatten / 截节 / tarball 解压）。author 只传 PDF 时自动回退 Marker（`SourceUnavailable`）。
-- [ ] 安装 marker-pdf 并预下载模型（仅当用 `--pdf` 或 arXiv 回退路径时需要）
-- [ ] 端到端跑通：`paper2manim mvp2 --arxiv 1706.03762 --section "Scaled Dot-Product Attention"`（需能访问 arxiv.org）
+- [x] 端到端跑通：`paper2manim mvp2 --arxiv 1706.03762 --section "Background"`（5 scenes 一次过 → 79s mp4，`runs/20260512-213215-4d4572/`）
+- [ ] 安装 marker-pdf 并预下载模型（仅当用 `--pdf` 路径时需要）
 - [ ] 端到端跑通：`paper2manim mvp2 --pdf examples/mvp2/<paper>.pdf`
 - [ ] 同一论文的双路径对比：`--arxiv` vs `--pdf`，记录 storyboard / summary 差异
 - [ ] 用一个故意 LaTeX 错的输入观察反思 retry 是否真触发并成功修复（也可手改 prompt 制造）
@@ -183,9 +179,26 @@
 - [ ] 与 baseline 对比：(1) zero-shot 单 LLM；(2) 无反思的多 agent；(3) 完整 paper2manim
 - [ ] 写论文实验章节
 
-### E. MVP 3.0 探索（远期）
-- [x] VLM Critic 脚手架（agents/vlm_scene_reviewer.py + infrastructure/vlm/）已合入，未接图
-- [ ] 把 `vlm_scene_reviewer` + `visual_revision_agent` 接入 `graphs/mvp2.py` 的反思闭环（D2 / D5 决议后）
+### E. MVP 3.0 探索
+
+#### 阶段 2/3 已完成（VLM 反思闭环）
+- [x] VLM Critic 脚手架（agents/vlm_scene_reviewer.py + infrastructure/vlm/）
+- [x] 把 `vlm_scene_reviewer` + `visual_revision_agent` 接入 `graphs/mvp2.py` 的反思闭环（节点：`frame_sampler` → `vlm_review` → `visual_revise` → `render` → ...，cap 由 `--max-visual-revisions` 控制）
+- [x] YAML 多 provider + `supports_vision` flag（`config.example.yaml` + `ModelConfig`），双 api_style：`openai_compatible` / `anthropic`（含 Azure bearer）
+- [x] frame_sampler：ffmpeg 抽 N 帧 hstack 成 montage PNG
+- [x] mock-VLM 闭环单测（4 条：pass 短路 / revise→pass / 触 cap / vlm_enabled=False 跳过）
+- [x] 真实实验：5 scenes / Azure Claude Sonnet 4.6 / cap=2，平均 Δavg=+0.20，详见 `docs/vlm_experiment.md`
+
+#### 阶段 4（EMB / 自进化）— **暂不考虑**
+> Proposal §4 + §7 的核心创新点（情景记忆库 + 知识蒸馏 + 进化曲线）保留作为未来工作的描述锚点；本仓库当前**不实现** EMB / 检索 / High-Score Rationale 写入。任何 PR / commit 中提及"自进化"或"EMB"仅作 proposal 引用，不构成实现承诺。
+
+#### 阶段 2/3 已知不足（在 `docs/vlm_experiment.md` 详述）
+- [ ] **评分 schema 对齐 proposal**：当前 6 维（paper_alignment / visual_clarity / readability / layout_balance / visual_focus / animation_perceived，1-5 分）与 proposal §4.2 的 3 维（Logic / Layout / Accuracy，0-100）不一致 → 收敛到哪一套需要决议
+- [ ] **best-of-N 保留**：当前 visual_revise 闭环只保留最后一版；遇到 v1>v2 的情况（如 TitleIntro 实验中 v1=2.83, v2=2.50），最终输出反而劣化
+- [ ] **阈值化 pass**：当前 Claude 极少自发判 "pass"，导致每 scene 都跑满 cap；可补一个"avg ≥ θ 自动 pass"的旁路逻辑
+- [ ] **VLM 维度筛选**：`readability / layout_balance` 长期 ≤2 受限于 480p15 渲染分辨率，VLM 让 coder 改 layout 也救不回 → 这两维改 retry 信号性价比低
+
+#### 其他探索（长期）
 - [ ] 把 `paper2manim.domain` 的富领域模型与 `state.py` 的 `PaperState` 调和（沿用 TypedDict + reducer 还是改成 Pydantic）
 - [ ] 把 `paper2manim.llm` 与 `paper2manim.infrastructure.llm.client` 收敛到单一客户端层（D3）
 - [ ] 图表抽取：原图嵌入 `ImageMobject`；或用代码复现图表
@@ -223,5 +236,11 @@
 ### MVP 2.0
 - [x] 反思 retry 单测通过（`test_mvp2_reflection_succeeds_after_two_retries`）
 - [x] give_up 单测通过（`test_mvp2_reflection_gives_up_at_cap`）
-- [ ] 1 篇真实论文端到端跑通，concat 出 ≥ 60 秒视频
-- [ ] 反思 cycle 在至少一次真实失败上成功修复
+- [x] 1 篇真实论文端到端跑通，concat 出 ≥ 60 秒视频（arXiv `1706.03762 §Background` → 79.0s mp4，5 scenes）
+- [ ] 反思 cycle 在至少一次真实失败上成功修复（实测中 Claude Sonnet 4.6 一次过 5/5，没触发文本反思 retry —— 该项需用更弱模型或人为注入错误验证）
+
+### MVP 3.0 阶段 2/3（VLM 反思闭环）
+- [x] mock-VLM 闭环单测通过（`tests/test_graph_mvp2_vlm.py` 4 条：pass / revise→pass / cap / vlm 关闭）
+- [x] VLM 在真实场景下成功被调用并落盘 6 维评分 + montage（`runs/20260512-221822-08f182/`）
+- [x] 至少一个 scene 的 visual revision 真正改进评分（TakeawayConclusion: 2.17 → 2.83，Δ=+0.67）
+- [x] 完整 5 scenes × cap=2 闭环跑完不崩 + concat 输出可播放 mp4（69.1s）

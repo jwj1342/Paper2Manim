@@ -1,17 +1,23 @@
+"""Pick the right :class:`VLMClient` for a :class:`ModelConfig`."""
+
 from __future__ import annotations
 
-from paper2manim.config.settings import Settings
+from paper2manim.config.model_config import ModelConfig
+from paper2manim.infrastructure.vlm.anthropic_vlm_client import AnthropicVLMClient
 from paper2manim.infrastructure.vlm.client import VLMClient
-from paper2manim.infrastructure.vlm.doubao_vlm_client import DoubaoVLMClient
-from paper2manim.infrastructure.vlm.mock_vlm_client import MockVLMClient
+from paper2manim.infrastructure.vlm.openai_vlm_client import OpenAICompatibleVLMClient
 
 
-def build_vlm_client(settings: Settings | None, *, mock: bool = False) -> VLMClient | None:
-    if settings is None or settings.vlm is None:
-        return None
-    if mock or settings.visual_review.use_mock_vlm:
-        return MockVLMClient()
-    provider = settings.vlm.provider.lower()
-    if provider in {"volcengine_ark", "ark", "doubao"}:
-        return DoubaoVLMClient(settings.vlm)
-    raise RuntimeError(f"Unsupported VLM provider: {settings.vlm.provider}")
+def build_vlm_client(cfg: ModelConfig) -> VLMClient:
+    if not cfg.supports_vision:
+        raise RuntimeError(
+            f"Model '{cfg.name}' is not declared supports_vision=true; refusing to build a VLM client."
+        )
+    if cfg.provider == "openai_compatible":
+        return OpenAICompatibleVLMClient(cfg)
+    if cfg.provider == "anthropic":
+        return AnthropicVLMClient(cfg)
+    raise RuntimeError(
+        f"Unsupported VLM provider '{cfg.provider}' on '{cfg.name}'. "
+        "Use 'openai_compatible' or 'anthropic'."
+    )

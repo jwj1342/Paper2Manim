@@ -107,18 +107,44 @@ def mvp1(input_arg: str, quality: str | None, no_render: bool, allow_render_on_l
 
 
 @cli.command()
-@click.option("--pdf", "pdf_path", default=None, type=click.Path(exists=True),
-              help="Local PDF file. Parsed via Marker.")
-@click.option("--arxiv", "arxiv_spec", default=None,
-              help="arXiv id/URL (e.g. '1706.03762' or 'https://arxiv.org/abs/1706.03762v2'). "
-                   "Uses author's LaTeX source when available; falls back to Marker on the PDF.")
-@click.option("--section", "arxiv_section", default=None,
-              help="Optional substring of a \\section{...} title to slice from the arXiv source "
-                   "(e.g. 'Method'). Ignored for --pdf.")
+@click.option(
+    "--pdf",
+    "pdf_path",
+    default=None,
+    type=click.Path(exists=True),
+    help="Local PDF file. Parsed via Marker.",
+)
+@click.option(
+    "--arxiv",
+    "arxiv_spec",
+    default=None,
+    help="arXiv id/URL (e.g. '1706.03762' or 'https://arxiv.org/abs/1706.03762v2'). "
+    "Uses author's LaTeX source when available; falls back to Marker on the PDF.",
+)
+@click.option(
+    "--section",
+    "arxiv_section",
+    default=None,
+    help="Optional substring of a \\section{...} title to slice from the arXiv source "
+    "(e.g. 'Method'). Ignored for --pdf.",
+)
 @click.option("--quality", default=None, type=click.Choice(["l", "m", "h"]))
 @click.option("--max-retries", default=None, type=int)
 @click.option("--no-render", is_flag=True)
 @click.option("--allow-render-on-login", is_flag=True)
+@click.option(
+    "--vlm/--no-vlm",
+    "vlm_enabled",
+    default=False,
+    help="Enable VLM multi-dim scoring loop on rendered scenes (requires config.yaml with vision_checker).",
+)
+@click.option(
+    "--max-visual-revisions",
+    default=2,
+    type=int,
+    show_default=True,
+    help="Per-scene cap on visual revision passes when --vlm is on.",
+)
 def mvp2(
     pdf_path: str | None,
     arxiv_spec: str | None,
@@ -127,6 +153,8 @@ def mvp2(
     max_retries: int | None,
     no_render: bool,
     allow_render_on_login: bool,
+    vlm_enabled: bool,
+    max_visual_revisions: int,
 ) -> None:
     """MVP 2.0: paper -> multi-scene video with reflection loop.
 
@@ -149,6 +177,10 @@ def mvp2(
         "max_retries": max_retries or settings.PAPER2MANIM_MAX_RETRIES,
         "quality": quality or settings.PAPER2MANIM_QUALITY,  # type: ignore[typeddict-item]
         "skip_render": no_render,
+        "vlm_enabled": vlm_enabled,
+        "vlm_revision_count": 0,
+        "max_visual_revisions": max_visual_revisions,
+        "visual_revision_decisions": [],
     }
     if pdf_path:
         save_input(run_id, pdf_path=pdf_path)
@@ -164,8 +196,16 @@ def mvp2(
         state["arxiv_section"] = arxiv_section
         tag = f" §{arxiv_section}" if arxiv_section else ""
         console.print(f"[cyan]MVP 2.0 run {run_id}[/cyan] (arxiv): {arxiv_spec}{tag}")
+    # Recursion-limit budget: scene count isn't known until storyboarder runs, so
+    # estimate generously. Per scene worst case = 1 init + (1+max_retries) text-reflect
+    # cycles (coder+render+reviewer, 3 nodes each) + max_visual_revisions VLM cycles
+    # (visual_revise+render+reviewer+frame_sampler+vlm_review, 5 nodes each) + the
+    # initial sampler+vlm_review pair + advance. Budget ~20 scenes plus upstream.
+    eff_retries = max_retries if max_retries is not None else settings.PAPER2MANIM_MAX_RETRIES
+    per_scene_budget = 4 + 3 * eff_retries + 5 * max_visual_revisions
+    recursion_limit = max(200, 16 + 20 * per_scene_budget)
     g = build_mvp2_graph()
-    final = g.invoke(state, config={"recursion_limit": 80})
+    final = g.invoke(state, config={"recursion_limit": recursion_limit})
     _print_summary(final)
     console.print(f"[green]Run dir:[/green] {run_dir(run_id)}")
 
@@ -173,16 +213,21 @@ def mvp2(
 @cli.command()
 def info() -> None:
     """Print configuration and environment status."""
-    console.print(json.dumps({
-        "MIMO_BASE_URL": settings.MIMO_BASE_URL,
-        "MIMO_API_KEY_set": bool(settings.MIMO_API_KEY),
-        "PAPER2MANIM_RUNS_DIR": str(settings.PAPER2MANIM_RUNS_DIR),
-        "PAPER2MANIM_DEFAULT_MODEL": settings.PAPER2MANIM_DEFAULT_MODEL,
-        "PAPER2MANIM_MAX_RETRIES": settings.PAPER2MANIM_MAX_RETRIES,
-        "PAPER2MANIM_QUALITY": settings.PAPER2MANIM_QUALITY,
-        "on_compute_node": _on_compute_node(),
-        "SLURM_JOB_ID": os.environ.get("SLURM_JOB_ID"),
-    }, indent=2))
+    console.print(
+        json.dumps(
+            {
+                "MIMO_BASE_URL": settings.MIMO_BASE_URL,
+                "MIMO_API_KEY_set": bool(settings.MIMO_API_KEY),
+                "PAPER2MANIM_RUNS_DIR": str(settings.PAPER2MANIM_RUNS_DIR),
+                "PAPER2MANIM_DEFAULT_MODEL": settings.PAPER2MANIM_DEFAULT_MODEL,
+                "PAPER2MANIM_MAX_RETRIES": settings.PAPER2MANIM_MAX_RETRIES,
+                "PAPER2MANIM_QUALITY": settings.PAPER2MANIM_QUALITY,
+                "on_compute_node": _on_compute_node(),
+                "SLURM_JOB_ID": os.environ.get("SLURM_JOB_ID"),
+            },
+            indent=2,
+        )
+    )
 
 
 if __name__ == "__main__":

@@ -35,7 +35,7 @@ def stub_pipeline(monkeypatch):
 
     llm = MagicMock()
 
-    def with_structured_output(model_cls):
+    def with_structured_output(model_cls, **_kwargs):
         if model_cls.__name__ == "SummaryModel":
             return summarizer_struct
         if model_cls.__name__ == "StoryboardModel":
@@ -60,6 +60,7 @@ def stub_pipeline(monkeypatch):
     monkeypatch.setattr("paper2manim.agents.summarizer.get_llm", lambda *a, **kw: llm)
     monkeypatch.setattr("paper2manim.agents.reviewer.get_llm", lambda *a, **kw: llm)
     from paper2manim.parsers import ParsedInput
+
     monkeypatch.setattr(
         "paper2manim.graphs.mvp2.parse_local_pdf",
         lambda p: ParsedInput(text="# Test paper\nbody", fmt="markdown", source="pdf:fake.pdf"),
@@ -199,13 +200,20 @@ def test_mvp2_early_exit_on_parser_fatal(monkeypatch):
     monkeypatch.setattr(mvp2_mod, "parser_node", parser_sets_fatal)
 
     # 2) Sentinels for downstream nodes
-    called = {"summarizer": False, "storyboarder": False, "init_scene": False,
-              "coder": False, "render": False, "reviewer": False}
+    called = {
+        "summarizer": False,
+        "storyboarder": False,
+        "init_scene": False,
+        "coder": False,
+        "render": False,
+        "reviewer": False,
+    }
 
     def make_sentinel(name):
         def fn(state):
             called[name] = True
             return {}
+
         return fn
 
     for name in called:
@@ -244,21 +252,31 @@ def test_mvp2_render_node_guards_missing_storyboard(monkeypatch, tmp_path):
     assert out.get("fatal_error", "").startswith("render: storyboard")
 
     # Index out of range
-    out = render_node({
-        "run_id": "r",
-        "storyboard": {"title": "t", "scenes": [{"name": "S", "description": "d", "duration_hint": 5}]},
-        "current_scene_idx": 5,
-        "current_code": "x",
-    })
+    out = render_node(
+        {
+            "run_id": "r",
+            "storyboard": {
+                "title": "t",
+                "scenes": [{"name": "S", "description": "d", "duration_hint": 5}],
+            },
+            "current_scene_idx": 5,
+            "current_code": "x",
+        }
+    )
     assert "out of range" in out.get("fatal_error", "")
 
     # Empty code
-    out = render_node({
-        "run_id": "r",
-        "storyboard": {"title": "t", "scenes": [{"name": "S", "description": "d", "duration_hint": 5}]},
-        "current_scene_idx": 0,
-        "current_code": "",
-    })
+    out = render_node(
+        {
+            "run_id": "r",
+            "storyboard": {
+                "title": "t",
+                "scenes": [{"name": "S", "description": "d", "duration_hint": 5}],
+            },
+            "current_scene_idx": 0,
+            "current_code": "",
+        }
+    )
     assert "current_code" in out.get("fatal_error", "")
 
     # skip_render flag honored, no fatal
