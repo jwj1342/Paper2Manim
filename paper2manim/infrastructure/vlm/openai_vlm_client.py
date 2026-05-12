@@ -17,11 +17,10 @@ class OpenAICompatibleVLMClient:
 
     def review_scene(self, prompt: str, image_path: str | Path) -> str:
         url = encode_image_data_url(Path(image_path))
-        resp = self._client.chat.completions.create(
-            model=self._cfg.model,
-            max_tokens=self._cfg.max_tokens,
-            temperature=self._cfg.temperature,
-            messages=[
+        kwargs: dict = {
+            "model": self._cfg.model,
+            "max_tokens": self._cfg.max_tokens,
+            "messages": [
                 {
                     "role": "user",
                     "content": [
@@ -30,5 +29,8 @@ class OpenAICompatibleVLMClient:
                     ],
                 }
             ],
-        )
+        }
+        if not self._cfg.omit_temperature:
+            kwargs["temperature"] = self._cfg.temperature
+        resp = self._client.chat.completions.create(**kwargs)
         return resp.choices[0].message.content or ""

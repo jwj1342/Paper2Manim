@@ -131,15 +131,17 @@ def _build_yaml_client(
             "by config.yaml or inline a key."
         )
     if cfg.provider == "openai_compatible":
-        return ChatOpenAI(
-            model=cfg.model,
-            api_key=cfg.api_key,
-            base_url=cfg.base_url,
-            temperature=temperature,
-            max_tokens=max_tokens,
-            timeout=timeout,
-            **extra,
-        )
+        oai_kwargs: dict[str, Any] = {
+            "model": cfg.model,
+            "api_key": cfg.api_key,
+            "base_url": cfg.base_url,
+            "max_tokens": max_tokens,
+            "timeout": timeout,
+        }
+        if not cfg.omit_temperature:
+            oai_kwargs["temperature"] = temperature
+        oai_kwargs.update(extra)
+        return ChatOpenAI(**oai_kwargs)
     if cfg.provider == "anthropic":
         # Imported lazily — langchain-anthropic is an optional dep until you
         # actually point a role at an Anthropic model.
@@ -149,10 +151,11 @@ def _build_yaml_client(
             "model": cfg.model,
             "anthropic_api_url": cfg.base_url,
             "anthropic_api_key": cfg.api_key,
-            "temperature": temperature,
             "max_tokens": max_tokens,
             "timeout": timeout,
         }
+        if not cfg.omit_temperature:
+            kwargs["temperature"] = temperature
         # Azure-hosted Claude uses Authorization: Bearer instead of the default
         # x-api-key header; flip via default_headers when auth_style says so.
         if cfg.auth_style == "bearer":

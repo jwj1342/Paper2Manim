@@ -22,6 +22,9 @@ class ModelConfig:
     # "bearer" forces Authorization: Bearer <key> via default_headers — required
     # for Azure-hosted Claude on the Anthropic Messages endpoint.
     auth_style: str = "header_api_key"
+    # Some models (e.g. Claude Opus 4.7) reject `temperature` outright. Set
+    # true and the LLM/VLM factories will omit the parameter at call time.
+    omit_temperature: bool = False
 
     @classmethod
     def from_dict(cls, value: dict[str, Any]) -> ModelConfig:
@@ -40,6 +43,7 @@ class ModelConfig:
             supports_vision=bool(value.get("supports_vision", False)),
             supports_thinking=bool(value.get("supports_thinking", False)),
             auth_style=str(value.get("auth_style") or "header_api_key").strip(),
+            omit_temperature=bool(value.get("omit_temperature", False)),
         )
 
     def __repr__(self) -> str:

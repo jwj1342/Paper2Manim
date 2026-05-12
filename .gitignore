@@ -22,6 +22,7 @@ venv/
 
 # Project-specific
 runs/
+logs/
 media/
 .manim_cache/
 *.mp4

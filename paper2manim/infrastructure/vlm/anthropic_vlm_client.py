@@ -25,11 +25,10 @@ class AnthropicVLMClient:
 
     def review_scene(self, prompt: str, image_path: str | Path) -> str:
         data, media = encode_image_base64(Path(image_path))
-        resp = self._client.messages.create(
-            model=self._cfg.model,
-            max_tokens=self._cfg.max_tokens,
-            temperature=self._cfg.temperature,
-            messages=[
+        kwargs: dict = {
+            "model": self._cfg.model,
+            "max_tokens": self._cfg.max_tokens,
+            "messages": [
                 {
                     "role": "user",
                     "content": [
@@ -45,6 +44,9 @@ class AnthropicVLMClient:
                     ],
                 }
             ],
-        )
+        }
+        if not self._cfg.omit_temperature:
+            kwargs["temperature"] = self._cfg.temperature
+        resp = self._client.messages.create(**kwargs)
         # Concatenate any text blocks the model emits.
         return "".join(blk.text for blk in resp.content if getattr(blk, "type", None) == "text")
