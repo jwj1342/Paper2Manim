@@ -103,8 +103,15 @@ def _yaml_settings() -> ModelSettings | None:
     try:
         return load_model_settings(_CONFIG_PATH)
     except Exception as exc:
-        log.warning("[llm] config.yaml present but unloadable: %s", exc)
-        return None
+        # Don't silently fall back to env-MiMo: the user put a config.yaml on
+        # disk so they expect it to be honored. A typo'd $ENV_VAR or malformed
+        # model entry should surface, not get masked by a fallback that suddenly
+        # routes traffic to a different provider.
+        raise RuntimeError(
+            f"[llm] config.yaml at {_CONFIG_PATH} is present but failed to load: "
+            f"{type(exc).__name__}: {exc}. Fix the file or delete it to fall "
+            "back to the env-MiMo path."
+        ) from exc
 
 
 def reload_config() -> None:

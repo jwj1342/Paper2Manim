@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import json
 import logging
-import re
 from pathlib import Path
 from typing import Any
 
@@ -32,7 +31,43 @@ _SCORE_KEYS = (
     "animation_perceived",
 )
 
-_JSON_RE = re.compile(r"\{.*\}", re.DOTALL)
+def _extract_first_json_object(raw: str) -> str | None:
+    """Return the first top-level ``{...}`` substring with balanced braces.
+
+    Replaces a greedy ``r"\\{.*\\}"`` regex that could span two JSON objects when
+    a chatty model emits e.g. a thinking trace followed by the answer, producing
+    invalid input for ``json.loads``. We walk the string once tracking depth and
+    ignoring braces inside double-quoted strings (with simple ``\\"`` escape
+    handling) — good enough for the JSON shape our prompt asks for.
+    """
+    in_str = False
+    escape = False
+    depth = 0
+    start = -1
+    for i, ch in enumerate(raw):
+        if escape:
+            escape = False
+            continue
+        if in_str:
+            if ch == "\\":
+                escape = True
+            elif ch == '"':
+                in_str = False
+            continue
+        if ch == '"':
+            in_str = True
+            continue
+        if ch == "{":
+            if depth == 0:
+                start = i
+            depth += 1
+        elif ch == "}":
+            if depth == 0:
+                continue
+            depth -= 1
+            if depth == 0 and start >= 0:
+                return raw[start : i + 1]
+    return None
 
 
 def _coerce_int(value: Any, default: int = 1) -> int:
@@ -71,11 +106,11 @@ def _conservative_review(scene_id: str, raw: str, error: str) -> dict[str, Any]:
 
 def parse_vlm_response(raw: str, scene_id: str) -> dict[str, Any]:
     """Best-effort JSON extraction — never raises."""
-    match = _JSON_RE.search(raw or "")
-    if not match:
+    blob = _extract_first_json_object(raw or "")
+    if not blob:
         return _conservative_review(scene_id, raw, "no JSON object found")
     try:
-        obj = json.loads(match.group(0))
+        obj = json.loads(blob)
     except json.JSONDecodeError as exc:
         return _conservative_review(scene_id, raw, f"json.JSONDecodeError: {exc}")
     decision = str(obj.get("decision") or "revise").strip().lower()

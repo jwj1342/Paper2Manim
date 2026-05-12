@@ -30,3 +30,15 @@ def test_get_llm_returns_chat_openai(monkeypatch):
 def test_get_llm_unknown_alias():
     with pytest.raises(ValueError):
         get_llm("ultra")  # type: ignore[arg-type]
+
+
+def test_malformed_config_yaml_raises_loudly(monkeypatch, tmp_path):
+    """A present-but-broken config.yaml must NOT silently drop back to env-MiMo."""
+    bad = tmp_path / "config.yaml"
+    bad.write_text("models:\n  - not-a-mapping\n", encoding="utf-8")
+    from paper2manim import llm as llm_mod
+
+    monkeypatch.setattr(llm_mod, "_CONFIG_PATH", bad)
+    llm_mod.reload_config()
+    with pytest.raises(RuntimeError, match="config.yaml.*failed to load"):
+        get_llm("scene_coder")
