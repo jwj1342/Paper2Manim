@@ -60,7 +60,7 @@ def _extract_scene_id(prompt: str) -> str:
     idx = prompt.find(needle)
     if idx < 0:
         return "unknown"
-    rest = prompt[idx + len(needle):]
+    rest = prompt[idx + len(needle) :]
     q1 = rest.find('"')
     if q1 < 0:
         return "unknown"

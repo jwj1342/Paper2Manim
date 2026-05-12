@@ -35,9 +35,7 @@ def load_model_settings(path: str | Path) -> ModelSettings:
 
 def _parse_model(raw: Any, index: int) -> ModelConfig:
     if not isinstance(raw, dict):
-        raise TypeError(
-            f"Model at index {index} must be a mapping, got {type(raw).__name__}."
-        )
+        raise TypeError(f"Model at index {index} must be a mapping, got {type(raw).__name__}.")
     raw_copy = dict(raw)
     raw_copy["api_key"] = _resolve_env(raw_copy.get("api_key", ""))
     return ModelConfig.from_dict(raw_copy)
@@ -70,9 +68,7 @@ def _validate_roles_exist(roles: dict[str, str], models: list[ModelConfig]) -> N
             )
 
 
-def _validate_vision_checker(
-    roles: dict[str, str], models: list[ModelConfig]
-) -> None:
+def _validate_vision_checker(roles: dict[str, str], models: list[ModelConfig]) -> None:
     vision_model_name = roles.get("vision_checker")
     if vision_model_name is None:
         return
@@ -93,9 +89,7 @@ def _read_yaml(path: Path) -> dict[str, Any]:
     if raw is None:
         return {}
     if not isinstance(raw, dict):
-        raise TypeError(
-            f"Config file {path} must contain a YAML mapping."
-        )
+        raise TypeError(f"Config file {path} must contain a YAML mapping.")
     return raw
 
 

@@ -10,6 +10,7 @@ from __future__ import annotations
 import logging
 import shutil
 import subprocess
+from contextlib import suppress
 from pathlib import Path
 
 log = logging.getLogger(__name__)
@@ -31,9 +32,12 @@ def _video_duration_seconds(video_path: Path) -> float:
     out = subprocess.run(
         [
             ffprobe,
-            "-v", "error",
-            "-show_entries", "format=duration",
-            "-of", "default=noprint_wrappers=1:nokey=1",
+            "-v",
+            "error",
+            "-show_entries",
+            "format=duration",
+            "-of",
+            "default=noprint_wrappers=1:nokey=1",
             str(video_path),
         ],
         check=False,
@@ -95,6 +99,8 @@ def sample_frames_montage(
 
     tmpdir = out_png.with_suffix("")
     tmpdir = tmpdir.parent / (tmpdir.name + "_frames")
+    # Wipe any leftover from a prior failed run so partial frames don't get hstack'd.
+    shutil.rmtree(tmpdir, ignore_errors=True)
     tmpdir.mkdir(exist_ok=True)
 
     frame_paths: list[Path] = []
@@ -104,11 +110,17 @@ def sample_frames_montage(
             result = subprocess.run(
                 [
                     ffmpeg,
-                    "-hide_banner", "-loglevel", "error",
-                    "-ss", f"{t:.3f}",
-                    "-i", str(video),
-                    "-frames:v", "1",
-                    "-vf", f"scale=-2:{frame_height}",
+                    "-hide_banner",
+                    "-loglevel",
+                    "error",
+                    "-ss",
+                    f"{t:.3f}",
+                    "-i",
+                    str(video),
+                    "-frames:v",
+                    "1",
+                    "-vf",
+                    f"scale=-2:{frame_height}",
                     "-y",
                     str(frame_path),
                 ],
@@ -119,13 +131,13 @@ def sample_frames_montage(
             )
             if result.returncode != 0 or not frame_path.exists():
                 raise FrameSamplerError(
-                    f"ffmpeg failed to extract frame {i} at t={t:.2f}s: "
-                    f"{result.stderr.strip()}"
+                    f"ffmpeg failed to extract frame {i} at t={t:.2f}s: {result.stderr.strip()}"
                 )
             frame_paths.append(frame_path)
 
         hstack_filter = (
-            "".join(f"[{i}:v]" for i in range(len(frame_paths))) + f"hstack=inputs={len(frame_paths)}"
+            "".join(f"[{i}:v]" for i in range(len(frame_paths)))
+            + f"hstack=inputs={len(frame_paths)}"
         )
         inputs: list[str] = []
         for fp in frame_paths:
@@ -133,9 +145,12 @@ def sample_frames_montage(
         merge = subprocess.run(
             [
                 ffmpeg,
-                "-hide_banner", "-loglevel", "error",
+                "-hide_banner",
+                "-loglevel",
+                "error",
                 *inputs,
-                "-filter_complex", hstack_filter,
+                "-filter_complex",
+                hstack_filter,
                 "-y",
                 str(out_png),
             ],
@@ -149,12 +164,7 @@ def sample_frames_montage(
         log.info("[frame_sampler] %s -> %s (n=%d)", video.name, out_png, n_frames)
         return out_png
     finally:
-        for fp in frame_paths:
-            try:
-                fp.unlink()
-            except OSError:
-                pass
-        try:
-            tmpdir.rmdir()
-        except OSError:
-            pass
+        # ignore_errors covers partial extraction (some frames absent) and any
+        # other stragglers ffmpeg might have written into tmpdir.
+        with suppress(OSError):
+            shutil.rmtree(tmpdir, ignore_errors=True)

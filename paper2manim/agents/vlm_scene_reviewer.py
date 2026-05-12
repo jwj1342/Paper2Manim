@@ -31,6 +31,7 @@ _SCORE_KEYS = (
     "animation_perceived",
 )
 
+
 def _extract_first_json_object(raw: str) -> str | None:
     """Return the first top-level ``{...}`` substring with balanced braces.
 
@@ -138,7 +139,11 @@ def _build_scene_spec_payload(
     paper_claim = ""
     paper_evidence: list[str] = []
     if summary:
-        paper_claim = (summary.get("key_contributions") or [""])[0] if summary.get("key_contributions") else ""
+        paper_claim = (
+            (summary.get("key_contributions") or [""])[0]
+            if summary.get("key_contributions")
+            else ""
+        )
         paper_evidence = list(summary.get("main_concepts") or [])
     return {
         "scene_id": scene.get("name") or f"scene_{scene_idx}",

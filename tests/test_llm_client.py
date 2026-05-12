@@ -1,6 +1,5 @@
 """Smoke test for llm.get_llm — does NOT call the real MiMo API."""
 
-
 import pytest
 
 from paper2manim.llm import get_llm

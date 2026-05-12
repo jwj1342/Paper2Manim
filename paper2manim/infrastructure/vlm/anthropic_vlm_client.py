@@ -19,9 +19,13 @@ class AnthropicVLMClient:
     def __init__(self, cfg: ModelConfig) -> None:
         self._cfg = cfg
         if cfg.auth_style == "bearer":
-            self._client = Anthropic(auth_token=cfg.api_key, base_url=cfg.base_url, timeout=cfg.timeout)
+            self._client = Anthropic(
+                auth_token=cfg.api_key, base_url=cfg.base_url, timeout=cfg.timeout
+            )
         else:
-            self._client = Anthropic(api_key=cfg.api_key, base_url=cfg.base_url, timeout=cfg.timeout)
+            self._client = Anthropic(
+                api_key=cfg.api_key, base_url=cfg.base_url, timeout=cfg.timeout
+            )
 
     def review_scene(self, prompt: str, image_path: str | Path) -> str:
         data, media = encode_image_base64(Path(image_path))

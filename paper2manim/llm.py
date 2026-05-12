@@ -82,6 +82,7 @@ def _seed_env_from_dotenv() -> None:
     from ``.env`` into the process env without clobbering already-set values.
     """
     import os
+
     dotenv = PROJECT_ROOT / ".env"
     if not dotenv.exists():
         return
@@ -230,9 +231,7 @@ def get_llm(
     try:
         cfg = settings.model_for_role(role)
     except KeyError as exc:
-        raise RuntimeError(
-            f"config.yaml has no model bound to role '{role}'. {exc}"
-        ) from exc
+        raise RuntimeError(f"config.yaml has no model bound to role '{role}'. {exc}") from exc
     return _build_yaml_client(
         cfg,
         temperature=temperature,
@@ -260,9 +259,7 @@ def get_vlm(
     try:
         cfg = settings.model_for_role(role)
     except KeyError as exc:
-        raise RuntimeError(
-            f"config.yaml has no model bound to role '{role}'. {exc}"
-        ) from exc
+        raise RuntimeError(f"config.yaml has no model bound to role '{role}'. {exc}") from exc
     if not cfg.supports_vision:
         raise RuntimeError(
             f"Model '{cfg.name}' bound to role '{role}' has supports_vision=false; "

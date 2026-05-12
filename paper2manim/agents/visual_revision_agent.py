@@ -42,20 +42,26 @@ def revise_code(
     system_prompt = load_prompt("visual_revision_agent")
     scene_id = scene.get("name") or "<unknown>"
     parts: list[str] = []
-    parts.append(f"## SceneSpec\n```json\n{_compact_json({'name': scene_id, 'description': scene.get('description', '')})}\n```\n")
+    parts.append(
+        f"## SceneSpec\n```json\n{_compact_json({'name': scene_id, 'description': scene.get('description', '')})}\n```\n"
+    )
     if summary:
         parts.append(f"## Paper summary\n```json\n{_compact_json(summary)}\n```\n")
     parts.append("## Current Manim code (renders but looks bad)\n```python\n")
     parts.append(current_code)
     parts.append("\n```\n")
     parts.append("## VisualReviewResult\n```json\n")
-    parts.append(_compact_json({
-        "decision": review.get("decision"),
-        "scores": review.get("scores"),
-        "issues": review.get("issues"),
-        "revision_instruction": review.get("revision_instruction"),
-        "paper_alignment_notes": review.get("paper_alignment_notes"),
-    }))
+    parts.append(
+        _compact_json(
+            {
+                "decision": review.get("decision"),
+                "scores": review.get("scores"),
+                "issues": review.get("issues"),
+                "revision_instruction": review.get("revision_instruction"),
+                "paper_alignment_notes": review.get("paper_alignment_notes"),
+            }
+        )
+    )
     parts.append("\n```\n")
     user = "".join(parts)
 
@@ -67,4 +73,5 @@ def revise_code(
 
 def _compact_json(payload: Any) -> str:
     import json
+
     return json.dumps(payload, ensure_ascii=False, indent=2)

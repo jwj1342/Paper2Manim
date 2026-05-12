@@ -115,7 +115,9 @@ def render_node(state: PaperState) -> dict[str, Any]:
         return {"fatal_error": "render: storyboard missing or malformed"}
     idx = state.get("current_scene_idx", 0)
     if idx >= len(sb["scenes"]):
-        return {"fatal_error": f"render: scene_idx {idx} out of range (n_scenes={len(sb['scenes'])})"}
+        return {
+            "fatal_error": f"render: scene_idx {idx} out of range (n_scenes={len(sb['scenes'])})"
+        }
     if not state.get("current_code"):
         return {"fatal_error": "render: current_code is empty"}
     scene = sb["scenes"][idx]
@@ -173,7 +175,11 @@ def frame_sampler_node(state: PaperState) -> dict[str, Any]:
     except FrameSamplerError as exc:
         log.warning("[frame_sampler] failed for %s: %s", scene_name, exc)
         return {"current_montage_path": None}
-    append_trace(state["run_id"], "frame_sampler", {"scene": scene_name, "v_rev": vrev, "montage": str(out_png)})
+    append_trace(
+        state["run_id"],
+        "frame_sampler",
+        {"scene": scene_name, "v_rev": vrev, "montage": str(out_png)},
+    )
     return {"current_montage_path": str(out_png)}
 
 
@@ -186,18 +192,31 @@ def vlm_review_node(state: PaperState) -> dict[str, Any]:
     if not montage or idx >= len(scenes):
         # No montage / out of range — treat as auto-pass so we don't block.
         log.warning("[vlm_review] missing montage or scene; auto-pass")
-        review = {"scene_id": scenes[idx]["name"] if idx < len(scenes) else "<unknown>",
-                  "decision": "pass", "scores": {}, "revision_instruction": ""}
+        review = {
+            "scene_id": scenes[idx]["name"] if idx < len(scenes) else "<unknown>",
+            "decision": "pass",
+            "scores": {},
+            "revision_instruction": "",
+        }
         return {"last_visual_review": review, "visual_revision_decisions": ["pass"]}
     scene = scenes[idx]
     summary = state.get("summary")
     try:
         review = review_scene(scene, montage, summary=summary, scene_idx=idx)
     except Exception as exc:
-        log.warning("[vlm_review] %s raised %s: %s — auto-pass to keep graph moving",
-                    scene["name"], type(exc).__name__, exc)
-        review = {"scene_id": scene["name"], "decision": "pass", "scores": {},
-                  "revision_instruction": "", "raw_response": f"{type(exc).__name__}: {exc}"}
+        log.warning(
+            "[vlm_review] %s raised %s: %s — auto-pass to keep graph moving",
+            scene["name"],
+            type(exc).__name__,
+            exc,
+        )
+        review = {
+            "scene_id": scene["name"],
+            "decision": "pass",
+            "scores": {},
+            "revision_instruction": "",
+            "raw_response": f"{type(exc).__name__}: {exc}",
+        }
     append_trace(
         state["run_id"],
         "vlm_review",
@@ -233,7 +252,9 @@ def visual_revise_node(state: PaperState) -> dict[str, Any]:
         new_code = current
     if state.get("run_id"):
         # Save under a distinct tag so we can compare pre/post revisions in the run dir.
-        save_attempt_code(state["run_id"], f"{scene['name']}_v{new_count}", state.get("iter_count", 0), new_code)
+        save_attempt_code(
+            state["run_id"], f"{scene['name']}_v{new_count}", state.get("iter_count", 0), new_code
+        )
         append_trace(state["run_id"], "visual_revise", {"scene": scene["name"], "v_rev": new_count})
     return {"current_code": new_code, "vlm_revision_count": new_count}
 
@@ -269,9 +290,7 @@ def concat_node(state: PaperState) -> dict[str, Any]:
         return {"fatal_error": "concat: no successful scenes to concatenate"}
     out_path = run_dir(state["run_id"]) / "final" / "output.mp4"
     final = concat_videos(videos, out_path)
-    append_trace(
-        state["run_id"], "concat", {"n_videos": len(videos), "final": str(final)}
-    )
+    append_trace(state["run_id"], "concat", {"n_videos": len(videos), "final": str(final)})
     return {"final_video_path": str(final)}
 
 

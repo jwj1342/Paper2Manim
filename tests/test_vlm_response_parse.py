@@ -43,7 +43,7 @@ def test_extract_returns_none_when_unbalanced():
 def test_parse_vlm_response_picks_first_object_when_model_chats_twice():
     """End-to-end: two top-level JSON objects → parser uses the first one."""
     raw = (
-        'Reasoning: the scene looks fine.\n'
+        "Reasoning: the scene looks fine.\n"
         '{"scene_id": "S1", "decision": "pass", "scores": '
         '{"paper_alignment": 5, "visual_clarity": 5, "readability": 5, '
         '"layout_balance": 5, "visual_focus": 5, "animation_perceived": 5}}\n'
