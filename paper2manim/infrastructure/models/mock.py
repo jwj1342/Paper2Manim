@@ -75,9 +75,8 @@ class MockModel:
     def _vision_text(self) -> str:
         return (
             '{"scene_id": "mock_scene", "decision": "pass", '
-            '"scores": {"paper_alignment": 4, "visual_clarity": 4, '
-            '"readability": 4, "layout_balance": 4, "visual_focus": 4, '
-            '"animation_perceived": 4}, "issues": [], '
+            '"scores": {"logic_flow": 80, "layout_occlusion": 80, '
+            '"accuracy": 80}, "issues": [], '
             '"paper_alignment_notes": "mock review", '
             '"revision_instruction": "none", "requires_replanning": false}'
         )

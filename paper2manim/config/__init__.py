@@ -1,63 +1,32 @@
-"""Unified configuration entry point.
+"""Configuration entry point.
 
-This package keeps two configuration layers side-by-side:
+Two layers, both production-active:
 
 1. **Environment-based settings** (``env.py``) — pydantic-settings reading
-   ``.env`` for API keys and runtime defaults. Used by the original
-   ``main``-branch agents/graphs via ``from paper2manim.config.env import settings``.
+   ``.env`` for API keys (MIMO_*, LANGSMITH_*) and runtime defaults
+   (PAPER2MANIM_*). Exposed as the module-level ``settings`` singleton via
+   ``from paper2manim.config.env import settings`` (we intentionally don't
+   re-export the instance here to keep import paths explicit).
 
-2. **YAML-based model & application settings** (``model_config.py``,
-   ``config_loader.py``, ``settings.py``) — adopted from the collaborator's
-   ``fix/api-client-config`` branch (D3 of issue #1) for multi-provider
-   model registry and richer application config.
-
-The collaborator's ``Settings`` (app-level dataclass) is re-exported as
-``AppSettings`` to avoid colliding with the env-based pydantic ``Settings``.
+2. **YAML-based model registry** (``model_config.py`` + ``config_loader.py``)
+   — multi-provider model definitions and role-to-model mapping loaded from
+   ``config.yaml``. Consumed by :mod:`paper2manim.llm` for role-routed LLM /
+   VLM clients.
 """
 
-# Env-based settings (main branch's pydantic-settings API).
-# NOTE: we intentionally do NOT re-export the ``settings`` instance here, because
-# the collaborator's ``settings.py`` submodule (re-exported below) would shadow
-# it. Callers wanting the env singleton should do
-# ``from paper2manim.config.env import settings`` or call ``get_settings()``.
 from paper2manim.config.config_loader import load_model_settings
 from paper2manim.config.env import (
     PROJECT_ROOT,
     Settings,
     get_settings,
 )
-
-# New: YAML-based model registry + role mapping
 from paper2manim.config.model_config import ModelConfig, ModelSettings
 
-# New: YAML-based application settings (collaborator's)
-from paper2manim.config.settings import (
-    ProviderDefaults,
-    VisualReviewConfig,
-    VLMConfig,
-    load_dotenv,
-)
-from paper2manim.config.settings import (
-    Settings as AppSettings,
-)
-from paper2manim.config.settings import (
-    load_settings as load_app_settings,
-)
-
 __all__ = [
-    # env-based (main)
     "Settings",
     "get_settings",
     "PROJECT_ROOT",
-    # YAML-based model registry
     "ModelConfig",
     "ModelSettings",
     "load_model_settings",
-    # YAML-based application settings (collaborator)
-    "AppSettings",
-    "ProviderDefaults",
-    "VLMConfig",
-    "VisualReviewConfig",
-    "load_app_settings",
-    "load_dotenv",
 ]

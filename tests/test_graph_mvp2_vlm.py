@@ -161,7 +161,7 @@ def test_vlm_pass_short_circuits_to_advance(stub_pipeline, monkeypatch, tmp_path
         }
     )
     assert review_calls["n"] == 1
-    assert out["visual_revision_decisions"] == ["pass"]
+    assert out["visual_revision_decisions"] == [{"scene": "Scene1", "decision": "pass"}]
     assert out["last_visual_review"]["decision"] == "pass"
     assert out["final_video_path"].endswith("output.mp4")
 
@@ -219,7 +219,10 @@ def test_vlm_revise_then_pass_advances(stub_pipeline, monkeypatch, tmp_path):
 
     assert review_calls["n"] == 2
     assert revise_calls["n"] == 1
-    assert out["visual_revision_decisions"] == ["revise", "pass"]
+    assert out["visual_revision_decisions"] == [
+        {"scene": "Scene1", "decision": "revise"},
+        {"scene": "Scene1", "decision": "pass"},
+    ]
     # Render ran twice for the same scene (original + 1 revision).
     assert len(out["attempts"]) == 2
     assert out["final_video_path"].endswith("output.mp4")
@@ -242,8 +245,9 @@ def test_vlm_revise_cap_advances(stub_pipeline, monkeypatch, tmp_path):
     monkeypatch.setattr("paper2manim.graphs.mvp2.review_scene", always_revise)
     monkeypatch.setattr(
         "paper2manim.graphs.mvp2.revise_code",
-        lambda *a,
-        **kw: "from manim import *\nclass Scene1(Scene):\n  def construct(self):\n    self.wait(0.1)\n",
+        lambda *a, **kw: (
+            "from manim import *\nclass Scene1(Scene):\n  def construct(self):\n    self.wait(0.1)\n"
+        ),
     )
 
     out = _run(
@@ -267,7 +271,11 @@ def test_vlm_revise_cap_advances(stub_pipeline, monkeypatch, tmp_path):
     )
     # cap=2 means 1 original render + 2 visual revisions = 3 renders, then advance
     assert review_calls["n"] == 3  # initial + 2 post-revision reviews
-    assert out["visual_revision_decisions"] == ["revise", "revise", "revise"]
+    assert out["visual_revision_decisions"] == [
+        {"scene": "Scene1", "decision": "revise"},
+        {"scene": "Scene1", "decision": "revise"},
+        {"scene": "Scene1", "decision": "revise"},
+    ]
     assert len(out["attempts"]) == 3
     assert out["final_video_path"].endswith("output.mp4")
 
@@ -333,7 +341,7 @@ def test_vlm_fail_decision_advances_without_revision(stub_pipeline, monkeypatch,
     monkeypatch.setattr("paper2manim.graphs.mvp2.review_scene", review_fail)
     monkeypatch.setattr(
         "paper2manim.graphs.mvp2.revise_code",
-        lambda *a, **kw: (revise_calls.__setitem__("n", revise_calls["n"] + 1) or ""),
+        lambda *a, **kw: revise_calls.__setitem__("n", revise_calls["n"] + 1) or "",
     )
 
     out = _run(
@@ -356,7 +364,7 @@ def test_vlm_fail_decision_advances_without_revision(stub_pipeline, monkeypatch,
         }
     )
     assert revise_calls["n"] == 0
-    assert out["visual_revision_decisions"] == ["fail"]
+    assert out["visual_revision_decisions"] == [{"scene": "Scene1", "decision": "fail"}]
     assert out["last_visual_review"]["decision"] == "fail"
     # Render succeeded → video is still concatenated (current "soft fail" semantics).
     assert out["final_video_path"].endswith("output.mp4")
@@ -373,7 +381,7 @@ def test_vlm_review_exception_treated_as_pass(stub_pipeline, monkeypatch, tmp_pa
     monkeypatch.setattr("paper2manim.graphs.mvp2.review_scene", review_boom)
     monkeypatch.setattr(
         "paper2manim.graphs.mvp2.revise_code",
-        lambda *a, **kw: (revise_calls.__setitem__("n", revise_calls["n"] + 1) or ""),
+        lambda *a, **kw: revise_calls.__setitem__("n", revise_calls["n"] + 1) or "",
     )
 
     out = _run(
@@ -531,8 +539,9 @@ def test_vlm_mixed_verdicts_across_scenes(monkeypatch, tmp_path):
     monkeypatch.setattr("paper2manim.graphs.mvp2.review_scene", scripted_review)
     monkeypatch.setattr(
         "paper2manim.graphs.mvp2.revise_code",
-        lambda *a,
-        **kw: "from manim import *\nclass S(Scene):\n  def construct(self):\n    self.wait(0.1)\n",
+        lambda *a, **kw: (
+            "from manim import *\nclass S(Scene):\n  def construct(self):\n    self.wait(0.1)\n"
+        ),
     )
 
     from paper2manim.graphs.mvp2 import build_mvp2_graph
@@ -563,4 +572,64 @@ def test_vlm_mixed_verdicts_across_scenes(monkeypatch, tmp_path):
     assert state_calls == {"SceneA": 1, "SceneB": 2, "SceneC": 3}
     # All three scenes' renders succeeded → all three concat'd.
     assert len(out["rendered_videos"]) == 3
+    assert out["final_video_path"].endswith("output.mp4")
+
+
+def test_vlm_auto_pass_when_avg_high(stub_pipeline, monkeypatch, tmp_path):
+    """avg-score ≥ 90 auto-pass bypass: review_scene returns decision=pass via the
+    parser's bypass even though the VLM originally said revise. The graph must
+    advance without entering visual_revise, and the trace must preserve the
+    raw_decision + average_score so we can audit how often the bypass fires.
+    """
+    review_calls = {"n": 0}
+    revise_calls = {"n": 0}
+
+    def review_auto_pass(*a, **kw):
+        review_calls["n"] += 1
+        # Mirrors what parse_vlm_response emits when the auto-pass bypass fires:
+        # decision is rewritten to "pass" but raw_decision keeps the model's
+        # original "revise", and average_score is populated.
+        return {
+            "scene_id": "Scene1",
+            "decision": "pass",
+            "raw_decision": "revise",
+            "scores": {"logic_flow": 92, "layout_occlusion": 95, "accuracy": 95},
+            "average_score": 94.0,
+            "revision_instruction": "tighten label spacing",
+            "raw_response": "",
+        }
+
+    monkeypatch.setattr("paper2manim.graphs.mvp2.review_scene", review_auto_pass)
+    monkeypatch.setattr(
+        "paper2manim.graphs.mvp2.revise_code",
+        lambda *a, **kw: revise_calls.__setitem__("n", revise_calls["n"] + 1) or "",
+    )
+
+    out = _run(
+        {
+            "run_id": "vlm-autopass",
+            "input_kind": "pdf",
+            "pdf_path": str(tmp_path / "f.pdf"),
+            "attempts": [],
+            "rendered_videos": [],
+            "skipped_scenes": [],
+            "current_scene_idx": 0,
+            "iter_count": 0,
+            "max_retries": 2,
+            "quality": "l",
+            "skip_render": False,
+            "vlm_enabled": True,
+            "vlm_revision_count": 0,
+            "max_visual_revisions": 2,
+            "visual_revision_decisions": [],
+        }
+    )
+
+    # One review only — no revise loop because decision came back as pass.
+    assert review_calls["n"] == 1
+    assert revise_calls["n"] == 0
+    assert out["visual_revision_decisions"] == [{"scene": "Scene1", "decision": "pass"}]
+    assert out["last_visual_review"]["decision"] == "pass"
+    assert out["last_visual_review"]["raw_decision"] == "revise"
+    assert out["last_visual_review"]["average_score"] == 94.0
     assert out["final_video_path"].endswith("output.mp4")

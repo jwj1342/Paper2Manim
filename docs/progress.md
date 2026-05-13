@@ -1,8 +1,8 @@
 # Progress
 
-> 更新时间：2026-05-13（PR #11 合并：multi-provider LLM 工厂 + YAML 路由 + VLM 反思接图正式 land；测试基线 59/59；config.yaml 异常显式抛错）
+> 更新时间：2026-05-13（VLM 评分 schema 收敛 3 维 × 0-100 + avg≥90 auto-pass bypass；issue #12 / #13 一并清；测试基线 65/65）
 >
-> 历史里程碑：MVP 2.0 真实论文验收 → YAML 多 provider + 多模态标识 → MVP 3.0 阶段 2/3 VLM 接图 + 实验数据（见 `docs/vlm_experiment.md`）。
+> 历史里程碑：MVP 2.0 真实论文验收 → YAML 多 provider + 多模态标识 → MVP 3.0 阶段 2/3 VLM 接图 + 实验数据（见 `docs/vlm_experiment.md`）→ proposal §4.2 canonical schema 落地。
 
 ## 总览
 
@@ -13,12 +13,12 @@
 | Sandbox（render/classify/concat） | 完成 | subprocess + rlimit + 静态预检（quality/manim_static_checker） |
 | MVP 1.0 agents（storyboarder, coder） | 完成 | 端到端验证通过 |
 | MVP 2.0 agents（summarizer, reviewer） | 完成 | 反思 cycle 单测 + 真实论文端到端验收均通过 |
-| MVP 3.0 阶段 2/3（VLM 多维评分接图） | 完成 | `agents/vlm_scene_reviewer` + `visual_revision_agent` + `utils/frame_sampler` 已接入 `graphs/mvp2.py`；CLI `--vlm` 开启；mock-VLM 闭环单测 7 条 + JSON 解析单测 5 条；真实实验数据见 `docs/vlm_experiment.md` |
+| MVP 3.0 阶段 2/3（VLM 多维评分接图） | 完成 | `agents/vlm_scene_reviewer` + `visual_revision_agent` + `utils/frame_sampler` 已接入 `graphs/mvp2.py`；CLI `--vlm` 开启；评分 schema = proposal §4.2 canonical 3 维 × 0-100（logic_flow / layout_occlusion / accuracy）+ avg≥90 auto-pass bypass；mock-VLM 闭环单测 8 条 + JSON 解析单测 10 条；真实实验数据见 `docs/vlm_experiment.md` |
 | MVP 3.0 阶段 4（EMB / 自进化） | 未启动 | 暂不考虑；保留 proposal §4 + §7 的描述作为未来工作锚点 |
 | Graphs（mvp1, mvp2） | 完成 | mvp2 新增 `frame_sampler → vlm_review → visual_revise` 闭环（cap=`max_visual_revisions`） |
 | Prompts | 完成 | 外置在 `prompts/*.md`，含 `vlm_scene_reviewer.md` + `visual_revision_agent.md` + `global_system.md` |
 | 多 provider + 多模态标识（YAML） | 完成 | `config.example.yaml` 模板（所有字段留空 + `$ENV_VAR` 引用）；`ModelConfig.supports_vision` / `auth_style` / `omit_temperature` 字段；`get_llm(role)` + `get_vlm()` 双入口；`provider` ∈ {openai_compatible, anthropic}，anthropic 支持 bearer auth（Azure Claude）；canonical roles ＝ {global_reader, scene_planner, scene_coder, render_fixer, final_summarizer, visual_reviser, vision_checker}，legacy alias（flash/pro/v2/v2-omni）继续可用 |
-| 测试 | 完成 | **59/59** 单测全绿（pytest -q 实测 2.59s）；详细分解见 `Done › Tests` 段 |
+| 测试 | 完成 | **65/65** 单测全绿（pytest -q）；详细分解见 `Done › Tests` 段 |
 | 输入解析（arXiv 源码 + 本地 PDF 兜底） | 完成 | `parsers/arxiv_source.py` + 分派 `parsers/__init__.py`；18 条新单测；SourceUnavailable 自动回退 Marker |
 | CI/CD（GitHub Actions） | 完成 | `.github/workflows/ci.yml`（pytest + ruff, py3.11/3.12 matrix）+ `codeql.yml`（每周 + 每次 PR） |
 | 分支保护 + Dependabot | 完成 | main 强制 PR + 3 个 check 必过 + 禁 force push；Dependabot 周更 pip / 月更 actions |
@@ -42,7 +42,7 @@
 ### 核心模块
 - `paper2manim/state.py` — LangGraph TypedDict `PaperState`，含 reflection 累积器（`Annotated[list[Attempt], operator.add]`）、per-scene 状态字段、控制位（含 `vlm_enabled` / `vlm_revision_count` / `max_visual_revisions` / `current_montage_path` / `last_visual_review` / `visual_revision_decisions`）
 - `paper2manim/llm.py` — **YAML 多 provider 工厂**：`config.yaml` 存在则按 canonical role（global_reader / scene_planner / scene_coder / render_fixer / final_summarizer / visual_reviser / vision_checker）路由到 `openai_compatible` 或 `anthropic` provider；legacy alias（flash/pro/v2/v2-omni）通过 `_LEGACY_ALIAS_TO_ROLE` 兼容旧 agent 代码；无 config.yaml 时走 env-MiMo 兜底（`MIMO_API_KEY`）；config.yaml 存在但解析失败时**显式抛 RuntimeError**（不静默回退，避免供应商被悄悄切换）；`safe_structured_invoke` 用 `method="function_calling"` 同时兼容 Doubao Ark + OpenAI + Anthropic；`get_vlm()` 强制 `supports_vision=true`；支持 `omit_temperature` 兼容 Claude Opus 4.7（temperature 被弃用）；`_seed_env_from_dotenv` 让 YAML 里的 `$ENV_VAR` 引用能解析 `.env` 中未在 pydantic-settings 字段声明的 key（如 `AZURE_CLAUDE_API_KEY`）
-- `paper2manim/config/` 包 — pydantic-settings：`config/env.py` 读 `.env`（含 `MIMO_*` / `LLM_*` / `VLM_*` 兼容字段，全部 default=""）；`config/model_config.py` 定义 `ModelConfig`（name / provider / model / base_url / api_key / supports_vision / auth_style / omit_temperature）+ `ModelSettings`（model_roles dict + `model_for_role()` 查表）；`config/config_loader.py` 读 `config.yaml` + `$ENV_VAR` 展开；`config/__init__.py` 同时 re-export 新旧入口（`AppSettings` + `settings`）保证 `from paper2manim.config import ...` 双兼容
+- `paper2manim/config/` 包 — 两层，均 production-active：`config/env.py` 用 pydantic-settings 读 `.env`（含 `MIMO_*` / `LLM_*` / `VLM_*` 兼容字段，全部 default=""），出口 `settings` 单例；`config/model_config.py` 定义 `ModelConfig`（name / provider / model / base_url / api_key / supports_vision / auth_style / omit_temperature）+ `ModelSettings`（model_roles dict + `model_for_role()` 查表）；`config/config_loader.py` 读 `config.yaml` + `$ENV_VAR` 展开 + role 表校验（`vision_checker` 必须 `supports_vision=true`）。**已清理**：D3 merge 时引入的 `config/settings.py`（`AppSettings` / 第三条配置轨道，~322 行死代码）已删除，`config/__init__.py` 收敛到只暴露 env + model_config 两套出口
 - `paper2manim/prompts.py` — 从 `prompts/*.md` 加载（lru_cache 但 hash 在每次进程内）
 - `paper2manim/artifacts.py` — `runs/<run_id>/` 目录管理 + `trace.jsonl` 流水
 - `paper2manim/logging_setup.py` — logging.basicConfig + 可选 LangSmith hook
@@ -63,14 +63,14 @@
 - `paper2manim/agents/coder.py` — 含 `extract_python_block` 抓 ` ```python ` 块；prompt 里把上一轮失败的 code + structured error_feedback + tex log 全塞进去
 - `paper2manim/agents/summarizer.py` — 长 markdown 自动切到 `pro`/`final_summarizer`（>30K chars 阈值）
 - `paper2manim/agents/reviewer.py` — 短路 success；硬 cap 命中直接 give_up；其余调 LLM 出 `{decision, hint}` JSON
-- `paper2manim/agents/vlm_scene_reviewer.py` — 6 维评分（paper_alignment / visual_clarity / readability / layout_balance / visual_focus / animation_perceived，1-5 分），返回 `{scene_id, decision: pass|revise|fail, scores, revision_instruction}`；`_extract_first_json_object` 用平衡花括号扫描兼容"思考链 + JSON"双输出 LLM（旧的 `r"\{.*\}"` greedy regex 会拼成非法 JSON）
+- `paper2manim/agents/vlm_scene_reviewer.py` — proposal §4.2 canonical 3 维评分（`logic_flow` / `layout_occlusion` / `accuracy`，0-100 分），返回 `{scene_id, decision: pass|revise|fail, raw_decision, scores, average_score, revision_instruction}`；`_extract_first_json_object` 用平衡花括号扫描兼容"思考链 + JSON"双输出 LLM；`parse_vlm_response` 内置 **avg ≥ 90 auto-pass bypass**：VLM 说 revise 但 3 维均分 ≥ 90 → 升级为 pass，`raw_decision` 保留原始判决供 trace 审计
 - `paper2manim/agents/visual_revision_agent.py` — 根据 VLM 的 `revision_instruction` 重写 Manim 源码；异常时回退原 code，不中断 graph
 
 ### Graphs
 - `paper2manim/graphs/mvp1.py` — `storyboarder → coder → render → END` 线性拓扑
 - `paper2manim/graphs/mvp2.py` — `parser → summarizer → storyboarder → init_scene → coder → render → reviewer → [retry: coder | frame_sampler（VLM 开启时）| advance] → [revise: visual_revise → render | advance] → [more: init_scene | done: concat] → END`，两套交错闭环：
   - **文本反思闭环**：render 失败 → reviewer 判 retry/give_up，cap=`max_retries`
-  - **VLM 视觉反思闭环**：render 成功 → frame_sampler 抽 4 帧 hstack 成 montage → vlm_review 6 维评分 → revise 时回到 visual_revise→render，cap=`max_visual_revisions`
+  - **VLM 视觉反思闭环**：render 成功 → frame_sampler 抽 4 帧 hstack 成 montage → vlm_review 3 维评分 + auto-pass bypass → revise 时回到 visual_revise→render，cap=`max_visual_revisions`
   - `post_vlm_route` 对 `decision="fail"` 采用 **soft-fail 策略**（不剔出 rendered_videos，避免最终视频为空，因为 Claude 极少自发判 pass，见 `docs/vlm_experiment.md` §4.2）
   - 三个上游 conditional edges（`parser`/`summarizer`/`storyboarder`）一旦置 `fatal_error` 直接早退到 END
 
@@ -81,7 +81,7 @@
 - `prompts/summarizer.md`（输出 SummaryModel JSON 严格 schema；含 LaTeX / Markdown 双输入分支提示）
 - `prompts/reviewer.md`（决策启发：连续两次同类错 → give_up；含正反例）
 - `prompts/global_system.md`（全局系统 prompt，被 VLM 相关 agent 共用）
-- `prompts/vlm_scene_reviewer.md`（6 维 × 1-5 评分严格 schema + decision 启发）
+- `prompts/vlm_scene_reviewer.md`（3 维 × 0-100 评分严格 schema + decision 启发 + 每维 0/100 锚点定义）
 - `prompts/visual_revision_agent.md`（根据 VLM revision_instruction 修改 Manim 源码的 prompt）
 
 ### Tests（pytest）
@@ -93,9 +93,9 @@
 - `tests/test_coder.py`（**4 用例**：fence 抽取、no-fence 兜底、error_feedback 回灌、storyboard 路径）
 - `tests/test_graph_mvp1.py`（**2 用例**：端到端 mock 跑通；render 成功 / skip 两条路径）
 - `tests/test_graph_mvp2.py`（**4 用例**：反思闭环两次 latex error 后第三次成功；max_retries=1 give_up；parser fatal 早退；render_node 缺 storyboard 守卫）
-- `tests/test_graph_mvp2_vlm.py`（**7 用例**：pass 短路 / revise→pass / 触 cap / vlm 关闭 / VLM 判 fail 不剔出 rendered_videos（soft-fail）/ vlm_review 抛异常时 auto-pass / 跨 scene 混合 verdict）
-- `tests/test_vlm_response_parse.py`（**5 用例**：两个 JSON 对象输入只取第一个 / 嵌套花括号 / 字符串内花括号 / 不平衡输入返回 None / chatty 模型先思考再 JSON）
-- 当前结果：**59/59 通过**（pytest -q 实测 2.59s，ruff clean）
+- `tests/test_graph_mvp2_vlm.py`（**8 用例**：pass 短路 / revise→pass / 触 cap / vlm 关闭 / VLM 判 fail 不剔出 rendered_videos（soft-fail）/ vlm_review 抛异常时 auto-pass / 跨 scene 混合 verdict / **avg ≥ 90 auto-pass bypass 端到端**）
+- `tests/test_vlm_response_parse.py`（**10 用例**：两个 JSON 对象输入只取第一个 / 嵌套花括号 / 字符串内花括号 / 不平衡输入返回 None / chatty 模型先思考再 JSON / 缺失维度记 None / [0,100] clamp / avg ≥ 90 auto-pass / avg < 90 不 auto-pass / 全空 scores 不 auto-pass）
+- 当前结果：**65/65 通过**（pytest -q，ruff clean）
 
 ### 端到端验收
 - **MVP 1.0** 真实跑通：`examples/mvp1/pythagorean.txt` → `runs/20260510-080654-3a1159/final/output.mp4`，时长 10.47s，854×480@15fps，h264，87.7 KB
@@ -134,6 +134,7 @@
 通过三次主题化 merge 把 `fix/api-client-config` 上的代码合入 main：
 
 1. **D3 — 多 provider 模型抽象**（commit `22d833b`）：`paper2manim/infrastructure/models/` + `infrastructure/llm/client.py` + `config/settings.py`（YAML AppSettings）+ `config.example.yaml`。与 main 的 `paper2manim/llm.py` 并存，未替换 LangGraph 节点中的客户端调用。`config.py` 重构为 `config/` 包；`config/__init__.py` 同时 re-export 旧的 env 配置与新的 AppSettings，确保 `from paper2manim.config import AppSettings` / `from paper2manim.config.env import settings` 都通。
+   > **后续清理**：`config/settings.py`（`AppSettings` / `ProviderDefaults` / `VLMConfig` / `VisualReviewConfig` / `load_settings`）在后续 audit 中被发现零外部调用——PR #11 落地 YAML 路由后被 `config/model_config.py` + `config/config_loader.py` 完全替代。整个文件 + `__init__.py` 的相关 re-export 已删除（resolves config-debt D4 / D13 / D14）。`infrastructure/llm/client.py` 和 `infrastructure/models/` 仍待清理。
 2. **D1 + D4 — 渲染前静态检查**（commit `113b791`）：`paper2manim/quality/manim_static_checker.py`，在 `sandbox/render.py` 进入 subprocess 前先做 AST 黑名单扫描（os/subprocess/socket/shutil/eval/exec/Path.write_text/Paragraph 等）+ 结构校验（必须 `from manim import *`、必须有 `Scene` 子类、必须 ≥2 个 `self.play(`）。失败转为 `StaticCheckError` 错误结果，不启动渲染子进程。D1 调整：解禁 `Tex` / `MathTex`（公式必须），保留 `Paragraph` 禁用（防 wall-of-text）。新增 3 条集成测试覆盖。
 3. **D2 / D5 脚手架 — VLM 视觉评审**（commit `519308f`）：`paper2manim/infrastructure/vlm/`（VLMClient Protocol + Doubao/豆包 实现 + Mock + factory）、`paper2manim/agents/vlm_scene_reviewer.py`、`paper2manim/agents/visual_revision_agent.py`、`paper2manim/domain/models.py`（1005 行领域模型：SceneSpec / PaperVideoPlan / VisualReviewResult 等）、`paper2manim/utils/{prompt_loader,text_utils}.py`、新增 `prompts/{global_system,vlm_scene_reviewer,visual_revision_agent}.md`。**未接入 graphs/mvp2.py**，待 issue #1 的 D2 / D5 讨论收敛后再决定整合策略。
 
@@ -222,7 +223,7 @@
 - [x] YAML 多 provider + `supports_vision` flag（`config.example.yaml` + `ModelConfig`），双 provider：`openai_compatible` / `anthropic`（含 Azure bearer 与 `omit_temperature` 兼容 Opus 4.7）
 - [x] frame_sampler：ffmpeg 抽 N 帧 hstack 成 montage PNG
 - [x] mock-VLM 闭环单测（**7 条**：pass 短路 / revise→pass / 触 cap / vlm_enabled=False 跳过 / fail decision soft-pass / vlm 抛异常 auto-pass / 跨 scene 混合 verdict）
-- [x] VLM 输出 JSON 解析鲁棒性（5 条：双 JSON 对象只取首个 / 嵌套花括号 / 字符串内花括号 / 不平衡输入 / chatty 模型先思考再答案）
+- [x] VLM 输出 JSON 解析鲁棒性（10 条：双 JSON 对象只取首个 / 嵌套花括号 / 字符串内花括号 / 不平衡输入 / chatty 模型先思考再答案 / 缺失维度记 None / [0,100] clamp / avg ≥ 90 auto-pass / avg < 90 不 auto-pass / 全空 scores 不 auto-pass）
 - [x] config.yaml 解析失败 fail-loud 而非静默回退（防止流量被悄悄切换供应商）
 - [x] 真实实验：5 scenes / Azure Claude Sonnet 4.6 / cap=2，平均 Δavg=+0.20，详见 `docs/vlm_experiment.md`
 - [x] Opus 4.7 端到端验证：5/5 scenes, 14 attempts, concat 84.4s mp4, 0 fatal_error
@@ -231,10 +232,10 @@
 > Proposal §4 + §7 的核心创新点（情景记忆库 + 知识蒸馏 + 进化曲线）保留作为未来工作的描述锚点；本仓库当前**不实现** EMB / 检索 / High-Score Rationale 写入。任何 PR / commit 中提及"自进化"或"EMB"仅作 proposal 引用，不构成实现承诺。
 
 #### 阶段 2/3 已知不足（在 `docs/vlm_experiment.md` 详述）
-- [ ] **评分 schema 对齐 proposal**：当前 6 维（paper_alignment / visual_clarity / readability / layout_balance / visual_focus / animation_perceived，1-5 分）与 proposal §4.2 的 3 维（Logic / Layout / Accuracy，0-100）不一致 → 收敛到哪一套需要决议
-- [ ] **best-of-N 保留**：当前 visual_revise 闭环只保留最后一版；遇到 v1>v2 的情况（如 TitleIntro 实验中 v1=2.83, v2=2.50），最终输出反而劣化
-- [ ] **阈值化 pass**：当前 Claude 极少自发判 "pass"，导致每 scene 都跑满 cap；可补一个"avg ≥ θ 自动 pass"的旁路逻辑
-- [ ] **VLM 维度筛选**：`readability / layout_balance` 长期 ≤2 受限于 480p15 渲染分辨率，VLM 让 coder 改 layout 也救不回 → 这两维改 retry 信号性价比低
+- [x] ~~评分 schema 对齐 proposal~~ — issue #12 已解：收敛为 3 维（logic_flow / layout_occlusion / accuracy，0-100）
+- [x] ~~阈值化 pass~~ — issue #12 顺带做：`parse_vlm_response` 内 avg ≥ 90 → auto-upgrade 为 pass，raw_decision 保留供 trace 审计
+- [ ] **best-of-N 保留**：当前 visual_revise 闭环只保留最后一版；遇到 v1>v2 的情况（如旧 baseline TitleIntro 中 v1=2.83, v2=2.50），最终输出反而劣化
+- [ ] **VLM 与渲染分辨率耦合**：layout_occlusion 维度在 480p15 下容易被压低，VLM 让 coder 改 layout 也救不回 → 未来需要把渲染质量从 schema 里解耦
 
 #### 其他探索（长期）
 - [ ] 把 `paper2manim.domain` 的富领域模型与 `state.py` 的 `PaperState` 调和（沿用 TypedDict + reducer 还是改成 Pydantic）
@@ -278,8 +279,8 @@
 - [ ] 反思 cycle 在至少一次真实失败上成功修复（实测中 Claude Sonnet 4.6 一次过 5/5，没触发文本反思 retry —— 该项需用更弱模型或人为注入错误验证）
 
 ### MVP 3.0 阶段 2/3（VLM 反思闭环）
-- [x] mock-VLM 闭环单测通过（`tests/test_graph_mvp2_vlm.py` 7 条：pass / revise→pass / cap / vlm 关闭 / fail soft-pass / 异常 auto-pass / 混合 verdict）
-- [x] VLM JSON 解析鲁棒性单测通过（`tests/test_vlm_response_parse.py` 5 条）
-- [x] VLM 在真实场景下成功被调用并落盘 6 维评分 + montage（`runs/20260512-221822-08f182/`）
-- [x] 至少一个 scene 的 visual revision 真正改进评分（TakeawayConclusion: 2.17 → 2.83，Δ=+0.67）
+- [x] mock-VLM 闭环单测通过（`tests/test_graph_mvp2_vlm.py` 8 条：pass / revise→pass / cap / vlm 关闭 / fail soft-pass / 异常 auto-pass / 混合 verdict / avg ≥ 90 auto-pass）
+- [x] VLM JSON 解析鲁棒性单测通过（`tests/test_vlm_response_parse.py` 10 条）
+- [x] VLM 在真实场景下成功被调用并落盘 3 维评分 + montage（旧 6 维 baseline `runs/20260512-221822-08f182/`，新 3 维 baseline 见 `docs/vlm_experiment.md`）
+- [x] 至少一个 scene 的 visual revision 真正改进评分（旧 6 维 baseline TakeawayConclusion: 2.17 → 2.83，Δ=+0.67；新 3 维 baseline 见 `docs/vlm_experiment.md` §3）
 - [x] 完整 5 scenes × cap=2 闭环跑完不崩 + concat 输出可播放 mp4（Sonnet 4.6: 69.1s；Opus 4.7: 84.4s）
