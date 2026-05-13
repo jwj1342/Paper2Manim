@@ -324,9 +324,10 @@ x 轴是累计处理的 paper-section 数。Hero Plot 上没有冷启动 / 稳�
 | 阶段 | 周次 | 产出 |
 |---|---|---|
 | MVP 2.0 收尾 | W1–W2 | 端到端跑通 ≥3 篇真实论文（已 land） |
-| MVP 3.0 §4.2/4.3（VLM Judge + Reflection） | W3–W4 | 接入 VLM、reflection loop 用 VLM 信号、跑 50 任务定性看（已在 PR #11 land） |
-| MVP 3.0 §4.4（EMB store + 蒸馏） | W5–W6 | 双桶 schema、检索接口、4a/4b 蒸馏管线（含写入端 validated 校验） |
-| MVP 3.0 §4.1（RAG 注入） | W7 | EMB 检索结果注入 Coder prompt；跑 bootstrap 50 任务 |
+| MVP 3.0 §4.2/4.3（VLM Judge + Reflection） | W3–W4 | 接入 VLM、reflection loop 用 VLM 信号（已在 PR #11 land + PR #15 schema 收敛 3 维×0-100） |
+| MVP 3.0 §4.4（EMB store + 蒸馏） | W5–W6 | 双桶 schema、检索接口、4a/4b 蒸馏管线（已在 PR #16 land） |
+| MVP 3.0 §4.1（RAG 注入） | W7 | EMB 检索结果注入 Coder prompt（已 land）；跑 bootstrap 50 任务 |
+| **图计算并行化** | W7 平行线 | per-scene fan-out + render/LLM throttle；把后续 Hero Plot 实验循环从天级压到小时级（PR #19） |
 | RQ1 + RQ2 主实验 | W8–W10 | 稳态 150 任务跑 Hero Plot；三组配置对比 + 100 条人类标注一致性 |
 | RQ3 跨域实验 | W11 | Domain A → Domain B 迁移 |
 | Ablation + 写作 | W12–W14 | EMNLP submission |
