@@ -100,6 +100,9 @@ def mvp1(input_arg: str, quality: str | None, no_render: bool, allow_render_on_l
         "skip_render": no_render,
     }
     console.print(f"[cyan]MVP 1.0 run {run_id}[/cyan]: {text[:80]}...")
+    # Stable plain-text marker so external drivers (run_experiment.py,
+    # run_bootstrap.py) can grep the run_id back without parsing rich output.
+    click.echo(f"RUN_ID={run_id}")
     g = build_mvp1_graph()
     final = g.invoke(state)
     _print_summary(final)
@@ -290,6 +293,9 @@ def mvp2(
         state["arxiv_section"] = arxiv_section
         tag = f" §{arxiv_section}" if arxiv_section else ""
         console.print(f"[cyan]MVP 2.0 run {run_id}[/cyan] (arxiv): {arxiv_spec}{tag}")
+    # Stable plain-text marker so external drivers (run_experiment.py,
+    # run_bootstrap.py) can grep the run_id back without parsing rich output.
+    click.echo(f"RUN_ID={run_id}")
     # The parent graph is shallow (parser → summarizer → storyboarder →
     # run_scene fan-out → concat → emb_consolidate); recursion limit just
     # needs to cover the linear depth plus the Send fan-out step. The per-scene
