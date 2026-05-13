@@ -120,6 +120,14 @@ class EpisodicMemoryBank:
             if not rec.context.task_embedding:
                 continue
             idx = self._index_for(rec.polarity)
+            # Skip records already present in a freshly-loaded index. Without
+            # this guard, FaissVectorIndex.add() sees the id in `_id_to_row`
+            # and falls into its remove+add path — a full O(N) rebuild per
+            # record, so rehydrating N records costs O(N²).
+            if getattr(idx, "_id_to_row", None) is not None and rec.id in idx._id_to_row:
+                continue
+            if getattr(idx, "_vectors", None) is not None and rec.id in idx._vectors:
+                continue
             try:
                 idx.add(rec.id, rec.context.task_embedding)
             except VectorIndexError as exc:
