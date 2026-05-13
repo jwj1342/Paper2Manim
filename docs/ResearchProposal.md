@@ -4,6 +4,8 @@
 
 > Self-Evolving Multi-Agent System for Educational Animation Generation via VLM-Driven Episodic Memory
 
+> 更新：2026-05-13 — §4 取消人工种子库的设定，改为统一管线下的自学习 EMB（详见 §4.1 / §4.4）；冷启动重新定义为 EMB 规模较小的早期段，代码路径与稳态期一致；§8.1 数据集相应调整为 paper-section 任务池；§8.3 Ablation C 调整为 bootstrap 批次大小消融。
+
 ---
 
 ## 1. Motivation：失忆的打工人
@@ -24,8 +26,8 @@
 
 我们的方案在已有反思架构（Reviewer-Coder loop）基础上引入两个关键组件：
 
-1. **情景记忆库（Episodic Memory Bank, EMB）**——一个外置的、可检索的知识库，**双通道**沉淀：既存储成功视频背后的 `<教学文本 → 视觉策略 → Manim 代码>` 三元组作为**正向示例**，也存储反思过程中诊断出的失败模式与修复规则作为**负向规则**（详见阶段 4）。
-2. **视觉奖励模型（Vision-Language Reward Model, VLRM）**——一个强 VLM（GPT-4o / Gemini-1.5-Pro / Claude-4 Opus），扮演**自主裁判**角色，多维度评估渲染后的视频帧并给出诊断报告，是决定"哪些经验值得入库"的把关人。
+1. **情景记忆库（Episodic Memory Bank, EMB）**——一个外置的、可检索的知识库，**双通道**沉淀：成功 scene 的 `<SceneSpec, Rationale, Final Code, VLM Final Score, 帧 hash>` 作为正向示例（4a）；反思过程中验证过的 failure→success 转化作为负向规则（4b）。EMB 完全由系统在 paper-section 任务流上自学习生成，不预置任何人工种子或外部视频库（详见 §4）。
+2. **视觉奖励模型（Vision-Language Reward Model, VLRM）**——一个强 VLM（GPT-4o / Gemini-1.5-Pro / Claude-4 Opus），扮演**自主裁判**角色，多维度评估渲染后的视频帧并给出诊断报告，是决定哪些经验值得入库的把关人。
 
 二者闭环作用：**生成 → 渲染 → VLM 打分 → 反思修改 → 再打分 → 高分入库**。随着记忆库扩充，下一轮同类任务的初版生成质量被检索增强直接拔高，反思轮数下降，Pass@1 攀升——形成可观测的"**进化曲线（Evolution Curve）**"。
 
@@ -33,19 +35,26 @@
 
 ---
 
-## 4. 四阶段进化框架（The Evolutionary Framework）
+## 4. 系统结构（The Evolutionary Framework）
 
-下面四个阶段构成一个严密的闭环。**阶段 1–3 是单次任务（intra-task）的"反思闭环"，阶段 4 是跨任务（inter-task）的"进化闭环"——这才是本工作的核心创新。**
+系统在概念上由三层耦合而成：任务内的反思闭环（§4.2 + §4.3，VLM 多维打分 + 局部迭代）、跨任务的记忆沉淀闭环（§4.4，双通道写入 EMB），以及由前两者共同驱动的检索增强生成（§4.1，从 EMB 召回 in-context 示例与失败规则）。
 
-### 阶段 1：冷启动与检索增强生成（RAG from Seed Memory）
+EMB 从空集开始，由 paper-section 任务流持续填充，没有独立的种子构建阶段——所谓冷启动只是 EMB 规模较小的早期段，其代码路径与稳态期完全一致。
 
-**种子记忆**：人工精选少量（约 50 条）高质量的 3Blue1Brown / Manim 社区精品视频片段，从中提取 `<教学文本, 视觉策略总结, Manim 代码>` 三元组作为冷启动的"专家先验"。
+### 4.1 检索增强生成（RAG over EMB）
 
-**检索增强**：收到新输入（例如"解释正态分布"）时，先在 EMB 中做语义检索，召回最相似的若干历史记忆，把它们的"视觉策略总结"+"成功代码片段"作为 in-context examples 注入 prompt，指导 Coder 生成初版代码 → 渲染初版视频。
+收到新输入（例如一篇论文的 §Background 节）后，系统先经 storyboarder 将该节切分成若干 SceneSpec。对每个 SceneSpec：
 
-> 越往后跑，EMB 越大，初版质量越高——这是阶段 4"自进化"在阶段 1 的直接体现。
+1. 计算 task_embedding（输入文本 + scene_role 拼接后过 sentence encoder）。
+2. 在 EMB.success 中检索 top-k 最近邻，作为正向示例注入 Coder prompt 的 Reference Examples 段（软约束）。
+3. 在 EMB.failure 中检索 top-k 最近邻，作为反向规则注入 Coder prompt 的 Known Pitfalls 段（硬约束）。
+4. Coder 据此生成初版代码，进入 §4.2 的 VLM 评估。
 
-### 阶段 2：VLM 多维度打分（VLRM-as-a-Judge）
+EMB 规模较小时（系统刚启动的前若干任务），检索结果信号弱、注入价值小，等效于退化为 zero-shot。但 §4.4 的写入闭环始终运行，使 EMB 规模随任务数单调增长——这正是进化曲线在 §4.1 的直接体现。
+
+与已有 RAG-augmented code generation 的关键差别不在检索算法本身，而在被检索的语料是系统自学习产物，不依赖人工构建。
+
+### 4.2 VLM 多维度打分（VLRM-as-a-Judge）
 
 把初版视频的**关键帧序列** + 原始**教学文本** + **storyboard** 一起喂给 VLM。VLM 在三个独立维度上打分：
 
@@ -57,7 +66,9 @@
 
 输出**结构化反馈**：`{score: 0–100, per_dim_scores: {...}, diagnostics: ["坐标轴标签和右侧球体重叠了", "动画过渡 0.3 秒太快, 观众跟不上"]}`。
 
-### 阶段 3：反思与局部迭代（Reflection & Iterative Refinement）
+> 实现注记：当前代码（见 `paper2manim/agents/vlm_scene_reviewer.py` 与 `docs/vlm_experiment.md`）使用 6 维 × 1-5 分而非 3 维 × 0-100，主要是工程便利。论文主实验前需收敛到本节描述的 3 维 schema。
+
+### 4.3 反思与局部迭代（Reflection & Iterative Refinement）
 
 Coder 接收 VLM 的诊断，**只改有问题的部分**（局部 patch，而非整段重写），重新渲染，再喂 VLM 评分。循环进行直到：
 
@@ -66,45 +77,87 @@ Coder 接收 VLM 的诊断，**只改有问题的部分**（局部 patch，而�
 
 > 与已有工作的差别：现有 reflection 只看"代码是否跑通"（Pass@1 binary），我们看"视觉是否合格"（VLM 连续打分），反馈信号信息量高一个数量级。
 
-### 阶段 4：记忆沉淀与自进化（Memory Consolidation & Self-Evolution）—— **核心创新**
+### 4.4 记忆沉淀（Memory Consolidation）—— **核心创新**
 
-阶段 3 收敛后系统执行**双通道知识蒸馏**：成功视频沉淀为正向示例（4a），反思过程中暴露的失败模式沉淀为负向规则（4b）。
+每一次 paper-section 任务收敛后，系统从 trace 中同时蒸馏两路记忆：成功 scene 的最终高分版本写入 EMB.success（4a），反思过程中验证过的 failure→success 转化写入 EMB.failure（4b）。两路写入共享 context 与 provenance 字段骨架，仅 body 字段按极性分歧。
 
 #### 4a：正向沉淀（Success Rationale Memory）
 
-视频一旦通过阶段 3 的高分校验，系统执行：
+scene 通过 §4.3 收敛、最终 VLM 分数 ≥ θ_high（默认 90/100）时：
 
-1. 让 VLM 写一段"**High-Score Rationale**"——为什么这是个好视频（"用渐入动画让公式逐项浮现，避免了一次性堆叠的视觉压力"）。
-2. 打包 `<Input Text, Rationale, Final Code, VLM Final Score, 关键帧 hash>` 写入 EMB，同时建立 embedding 索引。
-3. 下一次同类任务到来时，阶段 1 的检索直接召回这条记忆，初版代码质量被"喂答案"般拔高。
+1. 让 VLM 写一段 **High-Score Rationale**，自然语言描述为什么该 scene 是好示例（如：用渐入动画让公式逐项浮现，避免了一次性堆叠的视觉压力）。
+2. 打包 `<SceneSpec, Rationale, Final Code, VLM Final Score, 帧 hash>` 写入 EMB.success，同时建立 embedding 索引。
+3. 下一次同类任务到来时，§4.1 的检索直接召回该条目，初版代码质量被喂答案般拔高。
 
 #### 4b：负向沉淀（Failure Pattern Memory）
 
-仅靠正向沉淀有一个盲区：**反思 loop 在收敛过程中产生的负向信号被完全丢弃**。VLM 报告的每一个具体诊断（"`MathTex` 与 `Axes` 原点重叠"、"动画过渡 0.3s 太快观众跟不上"）、Reviewer 抓到的每一个 traceback（"`set_stroke()` got unexpected keyword `dash_pattern`"），都是"未来不该再犯"的可复用知识——目前 run 结束就蒸发。
+反思过程中产生的每一次 failure→success 转化都是潜在的 Lesson。具体来源：
 
-我们把这些反思事件**追溯到代码层级**（具体的 Mobject、API 调用、或视觉症状），蒸馏成 "**Lesson**" 形态的结构化规则：
+- 文本反思：render error / LaTeX log 触发 reviewer retry，后续版本渲染成功。
+- 视觉反思：VLM 低分诊断触发 visual_revise，后续版本 VLM 分数严格上升。
+
+只有同时满足以下两个条件的转化才入 EMB.failure：
+
+1. before / after 来自相邻的两次 attempt（确保因果性可归因）。
+2. after_score 严格高于 before_score（验证 fix 真正生效）。
+
+校验失败的转化（after ≤ before，例如 `docs/vlm_experiment.md` §4.3 中 TitleIntro 的 v1=2.83 → v2=2.50 案例）不入库，避免坏记忆污染——这是 EMB 质量的写入端硬过滤，比 §9 的定期重测更早。
+
+满足条件的转化经 LLM 蒸馏成结构化 Lesson：
 
 ```json
 {
-  "lesson_id": "L0042",
-  "trigger_pattern": "scene contains Axes + Text positioned at default ORIGIN",
-  "root_cause": "default Text placement collides with Axes origin",
-  "fix_recipe": "use .next_to(axes, UP, buff=0.5) or explicit .move_to() away from origin",
-  "code_anti_example": "Text('label')",
-  "code_good_example": "Text('label').next_to(axes, UP, buff=0.5)",
-  "tags": ["layout", "axes", "occlusion"],
-  "source_runs": ["run_20260512_..."],
-  "hit_count": 1
+  "polarity": "failure",
+  "context": {
+    "task_text": "...",
+    "task_embedding": [...],
+    "scene_role": "method",
+    "domain_tags": ["transformer", "attention"],
+    "source_paper": "arxiv:1706.03762",
+    "source_section": "Background"
+  },
+  "body": {
+    "trigger_pattern":   "scene contains Axes + Text positioned at default ORIGIN",
+    "root_cause":        "default Text placement collides with Axes origin",
+    "fix_recipe":        "use .next_to(axes, UP, buff=0.5) or explicit .move_to() away from origin",
+    "code_anti_example": "Text('label')",
+    "code_good_example": "Text('label').next_to(axes, UP, buff=0.5)",
+    "vlm_diagnostic":    "<原始 VLM 报告片段>"
+  },
+  "provenance": {
+    "run_id": "...",
+    "scene_id": "...",
+    "extraction_source": "visual_reflection",
+    "validated": true,
+    "before_score": 2.17,
+    "after_score": 2.83,
+    "hit_count": 0,
+    "first_seen": "..."
+  }
 }
 ```
 
-在下一轮任务的代码生成**前**（阶段 1 的检索环节），系统按当前 scene 描述 + 上一轮（若有）失败上下文检索 top-k 相关 Lesson，作为约束规则注入 Coder prompt 的 "Known pitfalls" 段。
+下一轮任务的代码生成**前**（§4.1 的检索环节），系统按当前 scene 描述检索 top-k 相关 Lesson，作为约束规则注入 Coder prompt 的 Known Pitfalls 段。
 
-**与 4a 的范式差别**：正向沉淀产出**自然语言 Rationale + 完整代码示例**，靠 in-context 软约束；失败沉淀产出**结构化规则**，作为硬约束注入 prompt。两路信号正交——**正向压缩"该怎么写"的探索空间，负向消解"不该怎么写"的重复试错**。
+#### 双桶共享 Schema
+
+EMB.success 与 EMB.failure 共享 context 字段（task_text / task_embedding / scene_role / domain_tags / source_paper / source_section）和 provenance 元数据骨架（run_id / scene_id / hit_count / first_seen / last_used）。两桶的差异仅在 body 与写入条件：
+
+| 字段 | success | failure |
+|---|---|---|
+| body | Rationale + 完整代码 + 关键代码片段 + 帧 hash | trigger_pattern + root_cause + fix_recipe + anti & good example |
+| 注入位置 | Coder prompt 的 Reference Examples 段（软约束） | Coder prompt 的 Known Pitfalls 段（硬约束） |
+| 写入条件 | scene 最终分数 ≥ θ_high | after_score > before_score 且 before/after 相邻 |
+
+共享 schema 头使两桶在检索接口、索引基础设施、provenance 追踪上完全对称——从工程角度可以把 EMB 理解为单一 store + polarity 元数据字段。
+
+#### 4a 与 4b 的范式差别
+
+正向沉淀产出**自然语言 Rationale + 完整代码示例**，靠 in-context 软约束；失败沉淀产出**结构化规则**，作为硬约束注入 prompt。两路信号正交——**正向压缩"该怎么写"的探索空间，负向消解"不该怎么写"的重复试错**。
 
 #### 进化效应
 
-随着任务量累积，平均反思轮数应当**单调下降**，Pass@1 应当**单调上升**。我们把这条曲线作为本工作的**核心实验图（Hero Plot）**。4a 与 4b 是该曲线背后两条**独立可量化**的收敛驱动力——同一类错误被 Reviewer 发现一次后即**全局免疫**（4b 贡献），而不仅仅是"找到一个最像的过去成功案例"（4a 贡献）。
+随着任务量累积，平均反思轮数应当**单调下降**，Pass@1 应当**单调上升**。我们把这条曲线作为本工作的**核心实验图（Hero Plot）**。4a 与 4b 是该曲线背后两条**独立可量化**的收敛驱动力——同一类错误经反思捕获并校验通过后即**全局免疫**（4b 贡献），而不仅仅是"找到一个最像的过去成功案例"（4a 贡献）。
 
 ```
             ↑ Pass@1
@@ -115,9 +168,11 @@ Coder 接收 VLM 的诊断，**只改有问题的部分**（局部 patch，而�
        0.5 ┤   ●━●━━
            │●━━
        0.3 ┤
-           └────────────────────────────────→ # tasks processed
+           └────────────────────────────────→ # paper-sections processed
             0    50    100   200   500
 ```
+
+x 轴是累计处理的 paper-section 数。Hero Plot 上没有冷启动 / 稳态期的断点——整条曲线就是单一管线在 EMB 规模递增下的单调进化轨迹。
 
 ---
 
@@ -162,12 +217,13 @@ Coder 接收 VLM 的诊断，**只改有问题的部分**（局部 patch，而�
 2. **避免纯工程口水仗**：我们不是去比"谁画图 API 调得更花哨"，而是探讨**LLM 如何通过反思与外部记忆，在多模态任务上做终身学习（Lifelong Learning）**——理论深度足够支撑顶会篇幅。
 3. **实验图极具说服力**：Hero Plot 是"随使用次数增加，Pass@1 单调爬升、反思轮数单调下降"的进化曲线——这种"系统在自己学习"的可视化在顶会上极有冲击力。
 4. **跨域泛化的反直觉性**：如果 RQ3 成立——"用线性代数的记忆能帮量子物理画得更好"——这是一个对评委非常有说服力的洞见。
+5. **零人工标注的方法学清洁度**：EMB 完全由系统在真实任务流上自学习产生，不依赖任何人工挑选的种子三元组或外部视频库——这点在 §10 的对比表上与 Voyager 等已有 skill-library 工作显著区分。
 
 ---
 
 ## 7. MVP 演进路线图（与代码仓库对应）
 
-为了让"故事"落到能跑的代码上，我们把工程实现拆成三个 MVP，与本仓库的 `paper2manim/graphs/mvp{1,2,3}.py` 一一对应。**注意**：本提案的核心创新（阶段 4 自进化）落在 MVP 3.0；MVP 1.0 / 2.0 是必要的能力前置铺垫。
+为了让"故事"落到能跑的代码上，我们把工程实现拆成三个 MVP，与本仓库的 `paper2manim/graphs/mvp{1,2,3}.py` 一一对应。**注意**：本提案的核心创新（§4.4 自进化）落在 MVP 3.0；MVP 1.0 / 2.0 是必要的能力前置铺垫。
 
 ### MVP 1.0：最短链路打通（PoC）
 
@@ -187,19 +243,20 @@ Coder 接收 VLM 的诊断，**只改有问题的部分**（局部 patch，而�
 - **流程**：Parser → Summarizer → Storyboarder → 【Coder ↔ Render-error-Reviewer】×N → Concat。
 - **关键差异**：阶段 2 的"VLM 视觉裁判"在 2.0 里**退化为编译错误反馈**（Python traceback / LaTeX log），用最便宜的信号先把反思 loop 工程跑通。
 - **目标**：在不引入 VLM 成本的前提下，先验证反思机制对**代码层成功率**的提升。
-- **当前状态**：**单测全通，待真实论文端到端验收**。
+- **当前状态**：**单测全通，真实论文端到端验收均通过**。
 
 ### MVP 3.0：VLM 闭环 + 记忆库（The Real Research Version）
 
-**对应阶段**：1 + 2 + 3 + **4**（完整四阶段框架）。
+**对应阶段**：§4 完整结构（4.1–4.4）。
 
-- **输入**：教学任务描述（论文 / 知识点 / 用户自然语言需求）。
-- **流程**：**EMB 检索 → Coder → Render → VLM 评分 → Reflection 局部修改 → 高分入 EMB**。
+- **输入**：教学任务描述（论文 / 知识点 / 用户自然语言需求），主流通道是 paper-section（与 MVP 2.0 一致）。
+- **流程**：**EMB 检索（§4.1）→ Coder → Render → VLM 评分（§4.2）→ Reflection 局部修改（§4.3）→ 双通道沉淀（§4.4）**。
 - **关键差异**：
-  - 阶段 2 接入真实 VLM（候选：GPT-4o / Gemini-1.5-Pro / 豆包视觉模型）。
-  - 阶段 4 实现知识蒸馏 + 记忆库写入 + 检索 in-context 注入。
+  - §4.2 接入真实 VLM（已落代码，详见 `docs/vlm_experiment.md`）。
+  - §4.4 实现双桶 EMB + 蒸馏管线 + 检索注入。
   - 引入"进化曲线"作为系统级核心评估指标。
-- **当前状态**：VLM 客户端、scene reviewer、visual revision agent 已落代码（见 `paper2manim/infrastructure/vlm/`、`paper2manim/agents/{vlm_scene_reviewer, visual_revision_agent}.py`），**尚未接入 graph、尚无 EMB**。本提案的全部核心创新点（RQ1/2/3）都在此版本上完成实验。
+- **冷启动**：bootstrap 批次（前 50–100 个 paper-section 任务）让 EMB 从空集起步；该批次内 Pass@1 偏低是预期行为，主要目的是产出初始记忆。bootstrap 段与稳态期使用完全相同的代码路径，差别仅在 EMB 规模。
+- **当前状态**：VLM 反思闭环（§4.2 + §4.3）已 land，详见 `docs/progress.md`；§4.1 的检索与 §4.4 的双通道沉淀尚未实现，是本提案下一步工程焦点。本提案的全部核心创新点（RQ1/2/3）都在此版本上完成实验。
 
 ---
 
@@ -207,9 +264,11 @@ Coder 接收 VLM 的诊断，**只改有问题的部分**（局部 patch，而�
 
 ### 8.1 数据集
 
-- **种子数据**（人工）：从 3Blue1Brown / Manim 社区精选 50 条优质视频片段，标注 `<text, strategy, code>` 三元组，作为 EMB 冷启动 + Memory 质量上限的参照。
-- **训练 / 进化任务池**（200 条）：覆盖 CS / 数学 / 物理三个学科，每个学科 ~70 条；每条是一段 200–400 字的概念解释。
+- **任务池**（约 300 条 paper-section）：从 arXiv 抓取 CS / 数学 / 物理三个学科的论文，按 `\section{...}` 切片；优先抽取 Background / Method / Experiment / Conclusion 四种 section_role，长度 ≤4K chars。覆盖至少 100 篇 paper 以保证主题多样性。
+- **Bootstrap 批次**（前 50–100 条）：任意采样自任务池，用于让 EMB 从空集起步；该批次内**不计入** Hero Plot 主曲线，主要目的是产出初始记忆。
+- **稳态评估批次**（接下来约 150 条）：用于绘制 Hero Plot 主体段——观察 Pass@1 / 平均反思轮数 / VLM 平均分随 EMB 规模的变化。
 - **跨域测试集**（50 条）：来自训练池**未出现**的两个学科（量子物理、微观经济学）；用于 RQ3。
+- 整套数据采集流程不需要任何人工三元组标注或外部视频库。
 
 ### 8.2 指标
 
@@ -224,9 +283,9 @@ Coder 接收 VLM 的诊断，**只改有问题的部分**（局部 patch，而�
 
 ### 8.3 关键消融
 
-- **Ablation A**：去掉 EMB（退回 MVP 2.0）——验证阶段 4 的必要性。
-- **Ablation B**：去掉 VLM 反馈，仅用代码运行错误（退回阶段 2 的退化版本）——验证 VLM 信号的增量价值。
-- **Ablation C**：种子记忆数量 ∈ {0, 10, 50, 200}——验证冷启动门槛。
+- **Ablation A**：去掉 EMB（退回 MVP 2.0）——验证 §4.4 的必要性。
+- **Ablation B**：去掉 VLM 反馈，仅用代码运行错误（退回 §4.2 的退化版本）——验证 VLM 信号的增量价值。
+- **Ablation C**：bootstrap 批次大小 ∈ {0, 10, 50, 100}——验证 EMB 早期规模对评估期 Pass@1 的影响。这是原 proposal 中"种子记忆数量"消融的等价版，因新设计没有外部种子，改为评估前预跑的任务数，语义相同。
 - **Ablation D**：把 VLRM 换成更小的开源 VLM（如 Qwen-VL）——验证 RQ2 的鲁棒性。
 - **Ablation E**：双通道分离消融——分别关闭 4a（正向 Rationale Memory）和 4b（Failure Pattern Memory），量化两路信号各自的边际贡献。预期：两路独立关闭后反思轮数下降斜率均显著变缓但不归零，证明它们正交且互补；同时关闭则退化为 Ablation A。
 
@@ -237,7 +296,8 @@ Coder 接收 VLM 的诊断，**只改有问题的部分**（局部 patch，而�
 | 风险 | 缓解 |
 |---|---|
 | VLM 评分与人类不一致（RQ2 失败） | 提前用 30 条小样本预试；若一致性低，用 Domain expert annotation 作为 ground truth 微调 prompt |
-| 记忆库出现"坏记忆"导致后续生成劣化 | 引入"记忆退化检测"：定期重测旧记忆在新 VLM 下的得分；分数下降则降权或剔除 |
+| 记忆库出现"坏记忆"导致后续生成劣化 | 写入端硬过滤：4b 要求 `after_score > before_score`，4a 要求 final ≥ θ_high；运行时引入"记忆退化检测"——定期重测旧记忆在新 VLM 下的得分，分数下降则降权或剔除 |
+| EMB 早期规模为 0 时检索几乎是 no-op，bootstrap 批次内 Pass@1 偏低 | 这是预期行为而非 bug——bootstrap 段不计入 Hero Plot 主曲线，且 4a/4b 沉淀正是从该段开始累积。论文 §Methodology 单独说明该段为非评估段 |
 | Domain B 上 EMB 反而拖累（RQ3 反直觉但可能） | 即使是 negative result 也具学术价值——揭示记忆迁移的边界条件 |
 | VLM API 调用成本 | 用本地 Qwen-VL 跑大规模实验，GPT-4o 仅在最终评估和 Ablation D 用 |
 
@@ -251,7 +311,9 @@ Coder 接收 VLM 的诊断，**只改有问题的部分**（局部 patch，而�
 | Code2Video (2025) | ✅ (multi-agent) | ❌ (rule-based) | ❌ | ❌ |
 | manim-generator | ✅ (compile-error) | ❌ | ❌ | ❌ |
 | Voyager (Minecraft, NeurIPS'23) | ✅ | ❌ | ✅ (skill library) | 部分 |
-| **Ours** | ✅ | **✅** | **✅ (dual-channel: success rationale + failure patterns)** | **✅ (核心指标)** |
+| **Ours** | ✅ | **✅** | **✅ (dual-channel: success rationale + validated failure patterns)** † | **✅ (核心指标)** |
+
+† EMB 完全由系统在 paper-section 任务流上自学习生成，不依赖任何人工标注的三元组或外部视频库；这是与 Voyager 等已有 skill-library 工作的关键区分点。
 
 我们与 Voyager 在"外部技能 / 记忆库"的思想上有共鸣，但 Voyager 在游戏环境内，奖励是规则化的稀疏信号；我们在多模态视觉创作任务上，奖励是 VLM 连续打分——这是更困难、也更接近真实"教学质量"的场景。
 
@@ -261,10 +323,11 @@ Coder 接收 VLM 的诊断，**只改有问题的部分**（局部 patch，而�
 
 | 阶段 | 周次 | 产出 |
 |---|---|---|
-| MVP 2.0 收尾 | W1–W2 | 端到端跑通 ≥3 篇真实论文 |
-| MVP 3.0 阶段 2（VLM Judge） | W3–W4 | 接入 VLM、reflection loop 用 VLM 信号、跑 50 任务定性看 |
-| MVP 3.0 阶段 4（EMB） | W5–W7 | 实现检索 + 知识蒸馏写入、跑通 200 任务进化曲线 |
-| RQ1 + RQ2 主实验 | W8–W10 | 三组配置对比 + 人类标注一致性 |
+| MVP 2.0 收尾 | W1–W2 | 端到端跑通 ≥3 篇真实论文（已 land） |
+| MVP 3.0 §4.2/4.3（VLM Judge + Reflection） | W3–W4 | 接入 VLM、reflection loop 用 VLM 信号、跑 50 任务定性看（已在 PR #11 land） |
+| MVP 3.0 §4.4（EMB store + 蒸馏） | W5–W6 | 双桶 schema、检索接口、4a/4b 蒸馏管线（含写入端 validated 校验） |
+| MVP 3.0 §4.1（RAG 注入） | W7 | EMB 检索结果注入 Coder prompt；跑 bootstrap 50 任务 |
+| RQ1 + RQ2 主实验 | W8–W10 | 稳态 150 任务跑 Hero Plot；三组配置对比 + 100 条人类标注一致性 |
 | RQ3 跨域实验 | W11 | Domain A → Domain B 迁移 |
 | Ablation + 写作 | W12–W14 | EMNLP submission |
 
@@ -272,4 +335,4 @@ Coder 接收 VLM 的诊断，**只改有问题的部分**（局部 patch，而�
 
 ## 12. 一句话总结
 
-> **我们让程序化动画生成 Agent 不再"失忆"。每一次成功的视频都成为下一次的起点，系统行为在不动权重的情况下持续进化——这是把 LLM 用作创作主体时最值得探索的下一步。**
+> **我们让程序化动画生成 Agent 不再"失忆"。每一次成功的视频都成为下一次的起点，每一次反思中验证过的失败修复都成为下一次的硬约束——系统行为在不动权重的情况下持续进化。这是把 LLM 用作创作主体时最值得探索的下一步。**

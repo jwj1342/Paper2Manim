@@ -1,4 +1,11 @@
-"""Coder agent: Storyboard scene + (optional error feedback) -> Manim Python code."""
+"""Coder agent: Storyboard scene + (optional error feedback) -> Manim Python code.
+
+When the EMB is enabled, the graph populates ``state["retrieved_success"]`` and
+``state["retrieved_failure"]`` ahead of this node; we inject them as
+*Reference Examples* (soft guidance) and *Known Pitfalls* (hard constraints)
+respectively. Both blocks are no-ops when the EMB is empty or disabled, so the
+Coder degrades cleanly to its pre-RAG behavior.
+"""
 
 from __future__ import annotations
 
@@ -8,6 +15,10 @@ import re
 from typing import Any
 
 from paper2manim.artifacts import append_trace, save_attempt_code
+from paper2manim.emb.retrieval import (
+    render_known_pitfalls_block,
+    render_reference_examples_block,
+)
 from paper2manim.llm import get_llm
 from paper2manim.prompts import load_prompt
 from paper2manim.state import PaperState
@@ -39,6 +50,18 @@ def _build_user_prompt(state: PaperState) -> str:
 
     blocks.append("\n## Project conventions\n")
     blocks.append(load_prompt("manim_skill_rules"))
+
+    # EMB-driven retrieval (Phase 3): if the graph stashed top-k records on
+    # state, render them as in-context guidance / constraints. Empty lists
+    # produce empty strings, so injecting unconditionally is safe.
+    ref_block = render_reference_examples_block(state.get("retrieved_success") or [])
+    pit_block = render_known_pitfalls_block(state.get("retrieved_failure") or [])
+    if ref_block:
+        blocks.append("\n")
+        blocks.append(ref_block)
+    if pit_block:
+        blocks.append("\n")
+        blocks.append(pit_block)
 
     if state.get("error_feedback"):
         ef = state["error_feedback"]
