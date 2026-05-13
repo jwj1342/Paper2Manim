@@ -1,4 +1,4 @@
-"""Mock VLM client for unit tests — returns deterministic 6-dim JSON."""
+"""Mock VLM client for unit tests — returns deterministic 3-dim JSON."""
 
 from __future__ import annotations
 
@@ -7,17 +7,18 @@ from pathlib import Path
 
 
 class MockVLMClient:
-    """Returns a canned 6-dim review.
+    """Returns a canned 3-dim review on the 0–100 scale.
 
     ``scripted`` overrides specific scene IDs with their own decision/scores.
-    Anything not in ``scripted`` falls back to ``default_decision``.
+    Anything not in ``scripted`` falls back to ``default_decision`` /
+    ``default_score`` for all three dimensions.
     """
 
     def __init__(
         self,
         *,
         default_decision: str = "pass",
-        default_score: int = 4,
+        default_score: int = 80,
         scripted: dict[str, dict] | None = None,
     ) -> None:
         self.default_decision = default_decision
@@ -36,12 +37,9 @@ class MockVLMClient:
                 "scene_id": scene_id,
                 "decision": decision,
                 "scores": {
-                    "paper_alignment": score,
-                    "visual_clarity": score,
-                    "readability": score,
-                    "layout_balance": score,
-                    "visual_focus": score,
-                    "animation_perceived": score,
+                    "logic_flow": score,
+                    "layout_occlusion": score,
+                    "accuracy": score,
                 },
                 "issues": scripted.get("issues", []),
                 "paper_alignment_notes": scripted.get("notes", "mock"),
