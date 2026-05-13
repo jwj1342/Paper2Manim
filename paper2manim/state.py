@@ -114,6 +114,24 @@ class PaperState(TypedDict, total=False):
     last_visual_review: dict | None  # the full review payload from vlm_scene_reviewer
     current_montage_path: str | None  # latest frame montage produced for this scene
 
+    # ---- Episodic Memory Bank (MVP 3.0 §4.1 + §4.4) ----
+    # Enabled by `--emb`. `emb_store_path` points at the directory holding
+    # `memory.db` + `{success,failure}.index`. The retrieve / consolidate
+    # nodes look this up on each invocation and cache the loaded EMB by path.
+    # `emb_instance` is a test-only escape hatch — when present, nodes use it
+    # directly and skip the path-based cache.
+    emb_enabled: bool
+    emb_store_path: str | None
+    emb_theta_high: float  # success-record acceptance threshold (avg score)
+    emb_failure_min_margin: float  # min (after-before) score gap for a failure record
+    emb_use_llm_distillers: bool  # if True, rationale_writer + lesson_distiller call the LLM
+    emb_use_faiss: bool
+    emb_use_real_embedder: bool
+    emb_instance: object | None  # test injection; opaque so TypedDict typecheck stays cheap
+    retrieved_success: list[dict]  # wire-format records (no embedding payload)
+    retrieved_failure: list[dict]
+    emb_writes: Annotated[list[dict], operator.add]  # consolidation reports, one per run/scene
+
     # ---- Control flags ----
     # `fatal_error` is for graph-level fatal errors only (parser/summarizer/storyboarder/
     # missing-input failures). It triggers early exit to END. Do NOT use this for

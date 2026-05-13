@@ -35,3 +35,13 @@ Do not import `manim.opengl` or use `--renderer=opengl` features. The renderer i
 - Did I avoid `OpenGL*` and any image/sound/file IO?
 
 If a previous attempt is shown with an error, **fix the specific error indicated**. Do not change unrelated parts of the code.
+
+# Reference Examples and Known Pitfalls
+
+You may receive two extra sections in the user message:
+
+- **Reference Examples**: past scenes that scored highly on the visual rubric. Treat them as guidance, not as boilerplate to copy verbatim. Adapt their layout / pacing techniques to the current scene's content.
+- **Known Pitfalls**: validated failure→success transitions from previous runs. Each pitfall lists a trigger pattern, root cause, an anti-example, and a good example. **Avoid the anti-example pattern** in your output. If your draft would match the anti-example, apply the corresponding fix recipe.
+
+Both sections are optional and may be empty. Their absence means no relevant past experience was found; generate the scene normally.
+

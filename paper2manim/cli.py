@@ -145,6 +145,45 @@ def mvp1(input_arg: str, quality: str | None, no_render: bool, allow_render_on_l
     show_default=True,
     help="Per-scene cap on visual revision passes when --vlm is on.",
 )
+@click.option(
+    "--emb/--no-emb",
+    "emb_enabled",
+    default=False,
+    help="Enable Episodic Memory Bank: retrieve past success/failure records before coding and consolidate at end of run (proposal §4.1 + §4.4).",
+)
+@click.option(
+    "--emb-store-path",
+    default=None,
+    type=click.Path(),
+    help="Directory for EMB persistence (memory.db + faiss indices). Defaults to $PAPER2MANIM_RUNS_DIR/_emb.",
+)
+@click.option(
+    "--emb-theta-high",
+    default=4.0,
+    type=float,
+    show_default=True,
+    help="Success-record acceptance threshold (avg VLM score on the 6-dim 1-5 scale). Lower for bootstrap runs with weak VLM signal.",
+)
+@click.option(
+    "--emb-failure-min-margin",
+    default=0.5,
+    type=float,
+    show_default=True,
+    help="Minimum (after_score - before_score) for a VLM transition to qualify as a validated failure record. Larger = fewer but cleaner records.",
+)
+@click.option(
+    "--emb-llm-distill/--no-emb-llm-distill",
+    "emb_use_llm_distillers",
+    default=False,
+    help="Use LLM-backed rationale_writer + lesson_distiller during consolidation (uses extra API calls). Off by default.",
+)
+@click.option(
+    "--emb-fake-embedder",
+    "emb_use_real_embedder",
+    flag_value=False,
+    default=True,
+    help="Use the dependency-free HashEmbedder instead of sentence-transformers. Useful for CI / offline bootstrap.",
+)
 def mvp2(
     pdf_path: str | None,
     arxiv_spec: str | None,
@@ -155,6 +194,12 @@ def mvp2(
     allow_render_on_login: bool,
     vlm_enabled: bool,
     max_visual_revisions: int,
+    emb_enabled: bool,
+    emb_store_path: str | None,
+    emb_theta_high: float,
+    emb_failure_min_margin: float,
+    emb_use_llm_distillers: bool,
+    emb_use_real_embedder: bool,
 ) -> None:
     """MVP 2.0: paper -> multi-scene video with reflection loop.
 
@@ -167,6 +212,9 @@ def mvp2(
     from paper2manim.graphs.mvp2 import build_mvp2_graph
 
     run_id = new_run_id()
+    # Resolve EMB path now so the user sees the final location in logs even on
+    # the default branch. Layout: <runs>/_emb/{memory.db,success.index,...}
+    resolved_emb_path = emb_store_path or str(Path(settings.PAPER2MANIM_RUNS_DIR) / "_emb")
     state: PaperState = {
         "run_id": run_id,
         "attempts": [],
@@ -181,7 +229,19 @@ def mvp2(
         "vlm_revision_count": 0,
         "max_visual_revisions": max_visual_revisions,
         "visual_revision_decisions": [],
+        "emb_enabled": emb_enabled,
+        "emb_store_path": resolved_emb_path if emb_enabled else None,
+        "emb_theta_high": emb_theta_high,
+        "emb_failure_min_margin": emb_failure_min_margin,
+        "emb_use_llm_distillers": emb_use_llm_distillers,
+        "emb_use_faiss": True,
+        "emb_use_real_embedder": emb_use_real_embedder,
+        "retrieved_success": [],
+        "retrieved_failure": [],
+        "emb_writes": [],
     }
+    if emb_enabled:
+        console.print(f"[cyan]EMB enabled[/cyan] — store={resolved_emb_path}, theta_high={emb_theta_high}")
     if pdf_path:
         save_input(run_id, pdf_path=pdf_path)
         state["input_kind"] = "pdf"
@@ -197,13 +257,14 @@ def mvp2(
         tag = f" §{arxiv_section}" if arxiv_section else ""
         console.print(f"[cyan]MVP 2.0 run {run_id}[/cyan] (arxiv): {arxiv_spec}{tag}")
     # Recursion-limit budget: scene count isn't known until storyboarder runs, so
-    # estimate generously. Per scene worst case = 1 init + (1+max_retries) text-reflect
-    # cycles (coder+render+reviewer, 3 nodes each) + max_visual_revisions VLM cycles
-    # (visual_revise+render+reviewer+frame_sampler+vlm_review, 5 nodes each) + the
-    # initial sampler+vlm_review pair + advance. Budget ~20 scenes plus upstream.
+    # estimate generously. Per scene worst case = 1 init + 1 emb_retrieve +
+    # (1+max_retries) text-reflect cycles (coder+render+reviewer, 3 nodes each)
+    # + max_visual_revisions VLM cycles (visual_revise+render+reviewer+
+    # frame_sampler+vlm_review, 5 nodes each) + the initial sampler+vlm_review
+    # pair + advance. Budget ~20 scenes plus upstream + emb_consolidate.
     eff_retries = max_retries if max_retries is not None else settings.PAPER2MANIM_MAX_RETRIES
-    per_scene_budget = 4 + 3 * eff_retries + 5 * max_visual_revisions
-    recursion_limit = max(200, 16 + 20 * per_scene_budget)
+    per_scene_budget = 5 + 3 * eff_retries + 5 * max_visual_revisions
+    recursion_limit = max(220, 18 + 20 * per_scene_budget)
     g = build_mvp2_graph()
     final = g.invoke(state, config={"recursion_limit": recursion_limit})
     _print_summary(final)

@@ -28,6 +28,15 @@ dependencies = [
 
 [project.optional-dependencies]
 mvp2 = ["marker-pdf>=1.0"]
+emb = [
+    # Episodic Memory Bank backend deps. The EMB module gracefully degrades
+    # to InMemoryVectorIndex + HashEmbedder when these are absent, so they're
+    # optional; only install when you want the real backend.
+    "sentence-transformers>=2.7",
+    "faiss-cpu>=1.7",
+    "numpy>=1.26",
+    "matplotlib>=3.8",  # plot_evolution.py Hero Plot
+]
 dev = [
     "pytest>=8",
     "pytest-mock>=3.12",

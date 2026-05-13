@@ -36,6 +36,9 @@ from paper2manim.artifacts import (
     save_attempt_code,
     save_attempt_result,
 )
+from paper2manim.emb.distill import consolidate_run, infer_source_metadata
+from paper2manim.emb.manager import EpisodicMemoryBank, build_default_emb
+from paper2manim.emb.retrieval import retrieve_for_scene, summarize_bundle
 from paper2manim.parsers import parse_arxiv, parse_local_pdf
 from paper2manim.sandbox.concat import concat_videos
 from paper2manim.sandbox.render import render
@@ -43,6 +46,42 @@ from paper2manim.state import PaperState
 from paper2manim.utils.frame_sampler import FrameSamplerError, sample_frames_montage
 
 log = logging.getLogger(__name__)
+
+
+# ---- EMB lookup ----------------------------------------------------------- #
+# Path-keyed cache so we don't reload SQLite + sentence-transformers on every
+# scene. Tests can inject a pre-built EMB via ``state['emb_instance']`` to
+# bypass the cache entirely.
+_EMB_CACHE: dict[str, EpisodicMemoryBank] = {}
+
+
+def _reset_emb_cache() -> None:
+    """Drop all cached EMB instances. Used by tests; safe in production too."""
+    _EMB_CACHE.clear()
+
+
+def _emb_for_state(state: PaperState) -> EpisodicMemoryBank | None:
+    """Resolve the EMB instance for the current run, or ``None`` when off."""
+    if not state.get("emb_enabled"):
+        return None
+    injected = state.get("emb_instance")
+    if isinstance(injected, EpisodicMemoryBank):
+        return injected
+    path = state.get("emb_store_path")
+    if not path:
+        return None
+    path_s = str(path)
+    if path_s not in _EMB_CACHE:
+        try:
+            _EMB_CACHE[path_s] = build_default_emb(
+                path_s,
+                use_faiss=bool(state.get("emb_use_faiss", True)),
+                use_real_embedder=bool(state.get("emb_use_real_embedder", True)),
+            )
+        except Exception as exc:  # noqa: BLE001
+            log.warning("[emb] build_default_emb failed for %s: %s — disabling EMB", path_s, exc)
+            return None
+    return _EMB_CACHE[path_s]
 
 
 def parser_node(state: PaperState) -> dict[str, Any]:
@@ -76,6 +115,94 @@ def parser_node(state: PaperState) -> dict[str, Any]:
         "parsed_format": parsed.fmt,
         "parser_source": parsed.source,
     }
+
+
+def emb_retrieve_node(state: PaperState) -> dict[str, Any]:
+    """Query the EMB for top-k success / failure records for the current scene.
+
+    Always returns valid ``retrieved_success`` / ``retrieved_failure`` lists
+    so the Coder can read them unconditionally. When the EMB is disabled,
+    empty, or unavailable we return empty lists — equivalent to zero-shot.
+    """
+    empty = {"retrieved_success": [], "retrieved_failure": []}
+    emb = _emb_for_state(state)
+    if emb is None:
+        return empty
+    sb = state.get("storyboard") or {}
+    scenes = sb.get("scenes", [])
+    idx = state.get("current_scene_idx", 0)
+    if idx >= len(scenes):
+        return empty
+    scene = scenes[idx]
+    scene_text = (scene.get("description") or scene.get("name") or "").strip()
+    if not scene_text:
+        return empty
+    bundle = retrieve_for_scene(emb, scene_text, k_success=2, k_failure=3)
+    wire = bundle.to_state_dict()
+    try:
+        append_trace(
+            state["run_id"],
+            "emb_retrieve",
+            {
+                "scene": scene["name"],
+                "stats": emb.stats(),
+                "hits": summarize_bundle(bundle),
+            },
+        )
+    except Exception:  # noqa: BLE001 — trace failures must not block the graph
+        pass
+    return {
+        "retrieved_success": wire["success"],
+        "retrieved_failure": wire["failure"],
+    }
+
+
+def emb_consolidate_node(state: PaperState) -> dict[str, Any]:
+    """End-of-run §4.4 sink: distill the trace into success/failure records.
+
+    Idempotent over re-runs of the same ``run_id`` only in that re-running it
+    will append duplicate records (no dedupe layer yet); call it exactly once
+    per finished run, which is what the graph does.
+    """
+    if not state.get("emb_enabled"):
+        return {}
+    emb = _emb_for_state(state)
+    if emb is None:
+        return {}
+    run_id = state.get("run_id")
+    if not run_id:
+        return {}
+    source_paper, source_section = infer_source_metadata(state)
+    use_llm = bool(state.get("emb_use_llm_distillers", False))
+    rw = None
+    ld = None
+    if use_llm:
+        # Lazy import: agents.rationale_writer + agents.lesson_distiller both
+        # import the LLM factory, which we'd rather skip when the distillers
+        # are off.
+        from paper2manim.agents.lesson_distiller import distill_lesson_llm
+        from paper2manim.agents.rationale_writer import write_rationale_llm
+
+        rw = write_rationale_llm
+        ld = distill_lesson_llm
+    theta = float(state.get("emb_theta_high", 4.0))
+    fail_margin = float(state.get("emb_failure_min_margin", 0.5))
+    try:
+        report = consolidate_run(
+            run_id,
+            emb,
+            state=dict(state),
+            theta_high=theta,
+            source_paper=source_paper,
+            source_section=source_section,
+            rationale_writer=rw,
+            lesson_distiller=ld,
+            failure_min_margin=fail_margin,
+        )
+    except Exception as exc:  # noqa: BLE001
+        log.warning("[emb_consolidate] failed for run %s: %s", run_id, exc)
+        return {}
+    return {"emb_writes": [report.to_dict()]}
 
 
 def init_scene_node(state: PaperState) -> dict[str, Any]:
@@ -396,6 +523,7 @@ def build_mvp2_graph():
     g.add_node("summarizer", summarizer_node)
     g.add_node("storyboarder", storyboarder_node)
     g.add_node("init_scene", init_scene_node)
+    g.add_node("emb_retrieve", emb_retrieve_node)
     g.add_node("coder", coder_node)
     g.add_node("render", render_node)
     g.add_node("reviewer", reviewer_node)
@@ -404,6 +532,7 @@ def build_mvp2_graph():
     g.add_node("visual_revise", visual_revise_node)
     g.add_node("advance", advance_scene_node)
     g.add_node("concat", concat_node)
+    g.add_node("emb_consolidate", emb_consolidate_node)
 
     g.set_entry_point("parser")
 
@@ -417,7 +546,11 @@ def build_mvp2_graph():
         pred, mapping = _is_fatal(dst)
         g.add_conditional_edges(src, pred, mapping)
 
-    g.add_edge("init_scene", "coder")
+    # EMB retrieval runs once per scene, between init_scene and coder. The
+    # reviewer's retry edge skips it on purpose — within-scene retries reuse
+    # the same retrieved records.
+    g.add_edge("init_scene", "emb_retrieve")
+    g.add_edge("emb_retrieve", "coder")
     g.add_edge("coder", "render")
     g.add_edge("render", "reviewer")
     g.add_conditional_edges(
@@ -437,5 +570,9 @@ def build_mvp2_graph():
     g.add_conditional_edges(
         "advance", has_more_scenes, {"init_scene": "init_scene", "concat": "concat"}
     )
-    g.add_edge("concat", END)
+    # Consolidation runs once at the very end. It's a no-op when emb_enabled
+    # is False, so leaving it unconditionally on the graph adds negligible
+    # overhead to non-EMB runs.
+    g.add_edge("concat", "emb_consolidate")
+    g.add_edge("emb_consolidate", END)
     return g.compile()
