@@ -107,6 +107,15 @@ class Provenance(BaseModel):
     run_id: str = Field(default="", description="paper2manim run that produced this record")
     scene_id: str = Field(default="", description="Scene name within the run")
     extraction_source: ExtractionSource = Field(default="manual")
+    transition_ordinal: int = Field(
+        default=0,
+        ge=0,
+        description=(
+            "Within-scene ordering for failure transitions so that v0→v1 and "
+            "v1→v2 of the same scene don't collide on the dedup key. "
+            "Visual: before_v_rev. Text: after_iter. Success records: 0."
+        ),
+    )
     validated: bool = Field(default=False)
     before_score: float | None = Field(default=None, description="Failure: low-score version")
     after_score: float | None = Field(default=None, description="Failure: high-score version")

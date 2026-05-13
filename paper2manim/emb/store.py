@@ -46,7 +46,12 @@ class MemoryStore(Protocol):
     def bump_hit(self, record_id: str, *, now: float | None = None) -> None: ...
 
     def find_id_by_provenance(
-        self, run_id: str, scene_id: str, polarity: Polarity, extraction_source: str
+        self,
+        run_id: str,
+        scene_id: str,
+        polarity: Polarity,
+        extraction_source: str,
+        transition_ordinal: int = 0,
     ) -> str | None: ...
 
 
@@ -55,24 +60,28 @@ class MemoryStore(Protocol):
 
 _SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS memory_records (
-    id                TEXT PRIMARY KEY,
-    polarity          TEXT NOT NULL CHECK (polarity IN ('success','failure')),
-    run_id            TEXT NOT NULL DEFAULT '',
-    scene_id          TEXT NOT NULL DEFAULT '',
-    extraction_source TEXT NOT NULL DEFAULT '',
-    context_json      TEXT NOT NULL,
-    body_json         TEXT NOT NULL,
-    provenance_json   TEXT NOT NULL,
-    created_at        REAL NOT NULL,
-    updated_at        REAL NOT NULL
+    id                 TEXT PRIMARY KEY,
+    polarity           TEXT NOT NULL CHECK (polarity IN ('success','failure')),
+    run_id             TEXT NOT NULL DEFAULT '',
+    scene_id           TEXT NOT NULL DEFAULT '',
+    extraction_source  TEXT NOT NULL DEFAULT '',
+    transition_ordinal INTEGER NOT NULL DEFAULT 0,
+    context_json       TEXT NOT NULL,
+    body_json          TEXT NOT NULL,
+    provenance_json    TEXT NOT NULL,
+    created_at         REAL NOT NULL,
+    updated_at         REAL NOT NULL
 );
 
 CREATE INDEX IF NOT EXISTS idx_polarity ON memory_records(polarity);
 CREATE INDEX IF NOT EXISTS idx_created  ON memory_records(created_at);
 -- Partial unique index: rows with empty provenance (legacy / test scaffolding)
--- are exempt; rows with real (run_id, scene_id) get deduped per polarity+source.
+-- are exempt; rows with real (run_id, scene_id) get deduped per
+-- (polarity, extraction_source, transition_ordinal). ``transition_ordinal``
+-- preserves within-scene ordering for failure transitions so v0→v1 and v1→v2
+-- of the same scene don't collide.
 CREATE UNIQUE INDEX IF NOT EXISTS uq_provenance
-    ON memory_records(run_id, scene_id, polarity, extraction_source)
+    ON memory_records(run_id, scene_id, polarity, extraction_source, transition_ordinal)
     WHERE run_id != '' AND scene_id != '';
 """
 
@@ -84,6 +93,17 @@ _MIGRATIONS_SQL = [
     "ALTER TABLE memory_records ADD COLUMN run_id TEXT NOT NULL DEFAULT ''",
     "ALTER TABLE memory_records ADD COLUMN scene_id TEXT NOT NULL DEFAULT ''",
     "ALTER TABLE memory_records ADD COLUMN extraction_source TEXT NOT NULL DEFAULT ''",
+    "ALTER TABLE memory_records ADD COLUMN transition_ordinal INTEGER NOT NULL DEFAULT 0",
+    # Replace the old 4-tuple uq_provenance with the new 5-tuple version on
+    # legacy databases. Safe to run on fresh DBs too (drops then re-creates
+    # the identical index). Existing 4-tuple-deduped data extends cleanly
+    # under transition_ordinal=0.
+    "DROP INDEX IF EXISTS uq_provenance",
+    (
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_provenance "
+        "ON memory_records(run_id, scene_id, polarity, extraction_source, transition_ordinal) "
+        "WHERE run_id != '' AND scene_id != ''"
+    ),
 ]
 
 
@@ -140,21 +160,29 @@ class SQLiteMemoryStore:
     # ---- API ----
 
     def find_id_by_provenance(
-        self, run_id: str, scene_id: str, polarity: Polarity, extraction_source: str
+        self,
+        run_id: str,
+        scene_id: str,
+        polarity: Polarity,
+        extraction_source: str,
+        transition_ordinal: int = 0,
     ) -> str | None:
         """Return the existing record id matching the provenance tuple, if any.
 
         Used by the manager to merge re-consolidations of the same
-        (run_id, scene_id, polarity, extraction_source) instead of accumulating
-        duplicates. Empty run_id / scene_id are not deduped (see partial index).
+        (run_id, scene_id, polarity, extraction_source, transition_ordinal)
+        instead of accumulating duplicates. Empty run_id / scene_id are not
+        deduped (see partial index). The ``transition_ordinal`` argument keeps
+        within-scene transitions (v0→v1 vs v1→v2) distinct.
         """
         if not run_id or not scene_id:
             return None
         with self._lock:
             cur = self._conn.execute(
                 "SELECT id FROM memory_records "
-                "WHERE run_id=? AND scene_id=? AND polarity=? AND extraction_source=?",
-                (run_id, scene_id, polarity, extraction_source),
+                "WHERE run_id=? AND scene_id=? AND polarity=? "
+                "AND extraction_source=? AND transition_ordinal=?",
+                (run_id, scene_id, polarity, extraction_source, transition_ordinal),
             )
             row = cur.fetchone()
         return row["id"] if row else None
@@ -167,8 +195,9 @@ class SQLiteMemoryStore:
                 self._conn.execute(
                     "INSERT OR REPLACE INTO memory_records "
                     "(id, polarity, run_id, scene_id, extraction_source, "
-                    " context_json, body_json, provenance_json, created_at, updated_at) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, "
+                    " transition_ordinal, context_json, body_json, "
+                    " provenance_json, created_at, updated_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, "
                     "COALESCE((SELECT created_at FROM memory_records WHERE id=?), ?), ?)",
                     (
                         record.id,
@@ -176,6 +205,7 @@ class SQLiteMemoryStore:
                         prov.run_id,
                         prov.scene_id,
                         prov.extraction_source,
+                        prov.transition_ordinal,
                         record.context.model_dump_json(),
                         record.body.model_dump_json(),
                         prov.model_dump_json(),
@@ -293,7 +323,12 @@ class InMemoryMemoryStore:
         rec.provenance.last_used = now if now is not None else time.time()
 
     def find_id_by_provenance(
-        self, run_id: str, scene_id: str, polarity: Polarity, extraction_source: str
+        self,
+        run_id: str,
+        scene_id: str,
+        polarity: Polarity,
+        extraction_source: str,
+        transition_ordinal: int = 0,
     ) -> str | None:
         if not run_id or not scene_id:
             return None
@@ -304,6 +339,7 @@ class InMemoryMemoryStore:
                 and p.scene_id == scene_id
                 and rec.polarity == polarity
                 and p.extraction_source == extraction_source
+                and p.transition_ordinal == transition_ordinal
             ):
                 return rid
         return None

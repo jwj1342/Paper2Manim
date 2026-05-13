@@ -162,6 +162,7 @@ class EpisodicMemoryBank:
                     rec.provenance.scene_id,
                     rec.polarity,
                     rec.provenance.extraction_source,
+                    rec.provenance.transition_ordinal,
                 )
             except Exception as exc:  # noqa: BLE001
                 log.warning("[emb] find_id_by_provenance failed: %s", exc)

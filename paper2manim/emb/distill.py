@@ -621,6 +621,10 @@ def distill_failure_records(
             run_id=run_id,
             scene_id=vt.scene,
             extraction_source="visual_reflection",
+            # before_v_rev keeps v0→v1 and v1→v2 of the same scene as separate
+            # records instead of letting the second silently overwrite the first
+            # under INSERT OR REPLACE.
+            transition_ordinal=vt.before_v_rev,
             validated=True,
             before_score=vt.before_score,
             after_score=vt.after_score,
@@ -642,6 +646,10 @@ def distill_failure_records(
             run_id=run_id,
             scene_id=tt.scene,
             extraction_source="text_reflection",
+            # after_iter keeps multiple text reflections within the same scene
+            # distinct (would only happen if a scene actually produced multiple
+            # error→success transitions on v_rev=0, but defensive in case).
+            transition_ordinal=tt.after_iter,
             validated=True,
             before_score=0.0,
             after_score=1.0,
