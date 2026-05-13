@@ -99,7 +99,7 @@ def stub_pipeline(monkeypatch):
             "workdir": str(kw.get("workdir", "/tmp")),
         }
 
-    monkeypatch.setattr("paper2manim.graphs.mvp2.render", fake_render)
+    monkeypatch.setattr("paper2manim.graphs.scene_graph.render", fake_render)
 
     # Stub concat: just write a placeholder
     def fake_concat(paths, out):
@@ -159,7 +159,7 @@ def test_mvp2_reflection_gives_up_at_cap(stub_pipeline, tmp_path, monkeypatch):
             "workdir": str(kw.get("workdir", "/tmp")),
         }
 
-    monkeypatch.setattr("paper2manim.graphs.mvp2.render", always_fail)
+    monkeypatch.setattr("paper2manim.graphs.scene_graph.render", always_fail)
 
     g = build_mvp2_graph()
     state = {
@@ -199,14 +199,16 @@ def test_mvp2_early_exit_on_parser_fatal(monkeypatch):
 
     monkeypatch.setattr(mvp2_mod, "parser_node", parser_sets_fatal)
 
-    # 2) Sentinels for downstream nodes
+    # 2) Sentinels for the remaining top-level nodes. The per-scene loop has
+    # moved into a sub-graph (scene_graph), so individual reflection nodes
+    # like ``coder`` / ``render`` / ``reviewer`` are no longer top-level
+    # nodes here. ``run_scene`` is the single Send target.
     called = {
         "summarizer": False,
         "storyboarder": False,
-        "init_scene": False,
-        "coder": False,
-        "render": False,
-        "reviewer": False,
+        "run_scene": False,
+        "concat": False,
+        "emb_consolidate": False,
     }
 
     def make_sentinel(name):
@@ -242,43 +244,34 @@ def test_mvp2_early_exit_on_parser_fatal(monkeypatch):
     assert not any(called.values()), f"early-exit broken; called: {called}"
 
 
-def test_mvp2_render_node_guards_missing_storyboard(monkeypatch, tmp_path):
-    """C1 regression: render_node must return fatal_error (not KeyError) when
-    storyboard is missing or scene index is out of range."""
-    from paper2manim.graphs.mvp2 import render_node
+def test_render_node_handles_degenerate_inputs(monkeypatch, tmp_path):
+    """C1 regression: scene_graph.render_node must degrade gracefully.
 
-    # Missing storyboard
-    out = render_node({"run_id": "r", "current_scene_idx": 0, "current_code": "x"})
-    assert out.get("fatal_error", "").startswith("render: storyboard")
+    Post-refactor the per-scene render_node lives in scene_graph and reads
+    ``state["scene"]`` directly (never a full storyboard). Out-of-range / missing
+    cases are guarded by fan_out_scenes before Send, so render_node only has to
+    handle: skip_render, no-scene, and empty current_code (synthetic error
+    attempt for reviewer to act on).
+    """
+    from paper2manim.graphs.scene_graph import render_node
 
-    # Index out of range
+    # skip_render honored, no-op
+    out = render_node({"skip_render": True, "scene": {"name": "S"}})
+    assert out == {}
+
+    # No scene attached → no-op (defensive)
+    out = render_node({"run_id": "r", "current_code": "x"})
+    assert out == {}
+
+    # Empty code with a real scene → synthetic error attempt, NOT a fatal error
     out = render_node(
         {
             "run_id": "r",
-            "storyboard": {
-                "title": "t",
-                "scenes": [{"name": "S", "description": "d", "duration_hint": 5}],
-            },
-            "current_scene_idx": 5,
-            "current_code": "x",
-        }
-    )
-    assert "out of range" in out.get("fatal_error", "")
-
-    # Empty code
-    out = render_node(
-        {
-            "run_id": "r",
-            "storyboard": {
-                "title": "t",
-                "scenes": [{"name": "S", "description": "d", "duration_hint": 5}],
-            },
-            "current_scene_idx": 0,
+            "scene": {"name": "S", "description": "d", "duration_hint": 5},
             "current_code": "",
         }
     )
-    assert "current_code" in out.get("fatal_error", "")
-
-    # skip_render flag honored, no fatal
-    out = render_node({"skip_render": True, "current_scene_idx": 0})
-    assert out == {}
+    attempts = out.get("attempts") or []
+    assert len(attempts) == 1
+    assert attempts[0]["render_result"]["status"] == "error"
+    assert "current_code" in attempts[0]["render_result"]["error_message"]

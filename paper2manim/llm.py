@@ -29,6 +29,7 @@ from langchain_core.language_models import BaseChatModel
 from langchain_openai import ChatOpenAI
 from pydantic import BaseModel, ValidationError
 
+from paper2manim import concurrency
 from paper2manim.config import PROJECT_ROOT, get_settings
 from paper2manim.config.config_loader import load_model_settings
 from paper2manim.config.model_config import ModelConfig, ModelSettings
@@ -229,28 +230,36 @@ def get_llm(
     timeout: float = 120,
     **kwargs,
 ) -> BaseChatModel:
-    """Return a chat client for ``model`` (role name or legacy alias)."""
+    """Return a chat client for ``model`` (role name or legacy alias).
+
+    The client is wrapped in :class:`RateLimitedLLM`; when no LLM rate limit
+    is configured (the default) the wrapper is a near-zero-overhead pass-through.
+    """
     role = _resolve_role(model)
     settings = _yaml_settings()
     if settings is None:
-        return _build_mimo_fallback(
+        client = _build_mimo_fallback(
             model,
             temperature=temperature,
             max_tokens=max_tokens,
             timeout=timeout,
             extra=kwargs,
         )
-    try:
-        cfg = settings.model_for_role(role)
-    except KeyError as exc:
-        raise RuntimeError(f"config.yaml has no model bound to role '{role}'. {exc}") from exc
-    return _build_yaml_client(
-        cfg,
-        temperature=temperature,
-        max_tokens=max_tokens,
-        timeout=timeout,
-        extra=kwargs,
-    )
+    else:
+        try:
+            cfg = settings.model_for_role(role)
+        except KeyError as exc:
+            raise RuntimeError(
+                f"config.yaml has no model bound to role '{role}'. {exc}"
+            ) from exc
+        client = _build_yaml_client(
+            cfg,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            timeout=timeout,
+            extra=kwargs,
+        )
+    return RateLimitedLLM(client)  # type: ignore[return-value]
 
 
 def get_vlm(
@@ -277,12 +286,14 @@ def get_vlm(
             f"Model '{cfg.name}' bound to role '{role}' has supports_vision=false; "
             "point the role at a vision-capable model."
         )
-    return _build_yaml_client(
-        cfg,
-        temperature=temperature,
-        max_tokens=max_tokens,
-        timeout=timeout,
-        extra=kwargs,
+    return RateLimitedLLM(  # type: ignore[return-value]
+        _build_yaml_client(
+            cfg,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            timeout=timeout,
+            extra=kwargs,
+        )
     )
 
 
@@ -317,6 +328,119 @@ def is_vision_capable(model: str = "vision_checker") -> bool:
         return s.model_for_role(role).supports_vision
     except KeyError:
         return False
+
+
+class _ThrottledRunnable:
+    """Transparent throttled wrapper for any langchain Runnable.
+
+    Returned by :meth:`RateLimitedLLM.with_structured_output` and ``__or__``
+    so chains built from a rate-limited LLM keep throttling on every call.
+    Falls back to attribute delegation for anything we don't explicitly wrap
+    (e.g. ``.bound`` on RunnableBindings).
+    """
+
+    __slots__ = ("_runnable",)
+
+    def __init__(self, runnable: Any) -> None:
+        self._runnable = runnable
+
+    def invoke(self, input: Any, config: Any = None, **kwargs: Any) -> Any:
+        concurrency.llm_acquire()
+        return self._runnable.invoke(input, config, **kwargs)
+
+    async def ainvoke(self, input: Any, config: Any = None, **kwargs: Any) -> Any:
+        concurrency.llm_acquire()
+        return await self._runnable.ainvoke(input, config, **kwargs)
+
+    def stream(self, input: Any, config: Any = None, **kwargs: Any) -> Any:
+        concurrency.llm_acquire()
+        return self._runnable.stream(input, config, **kwargs)
+
+    def batch(self, inputs: list[Any], config: Any = None, **kwargs: Any) -> list[Any]:
+        for _ in inputs:
+            concurrency.llm_acquire()
+        return self._runnable.batch(inputs, config, **kwargs)
+
+    def __or__(self, other: Any) -> _ThrottledRunnable:
+        return _ThrottledRunnable(self._runnable | other)
+
+    def __ror__(self, other: Any) -> _ThrottledRunnable:
+        return _ThrottledRunnable(other | self._runnable)
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._runnable, name)
+
+
+class RateLimitedLLM:
+    """Wraps a :class:`BaseChatModel`; gates every network call on
+    :data:`concurrency.LLM_BUCKET`.
+
+    No-op overhead when the bucket is ``None`` (default). Exposes the public
+    Runnable surface used across paper2manim:
+
+    * ``invoke / ainvoke / stream / astream / batch / abatch`` — single
+      network call each; one bucket acquire per call (batch: per item).
+    * ``with_structured_output(...)`` — returns a throttled runnable.
+    * ``bind_tools(...)`` — returns a fresh :class:`RateLimitedLLM` over the
+      bound underlying.
+    * ``| other`` (LCEL composition) — returns a throttled sequence.
+    * Anything else is delegated to the underlying chat model via
+      ``__getattr__``.
+    """
+
+    __slots__ = ("_llm",)
+
+    def __init__(self, llm: BaseChatModel) -> None:
+        self._llm = llm
+
+    # ---- The methods that fire a real network call ----
+
+    def invoke(self, input: Any, config: Any = None, **kwargs: Any) -> Any:
+        concurrency.llm_acquire()
+        return self._llm.invoke(input, config, **kwargs)
+
+    async def ainvoke(self, input: Any, config: Any = None, **kwargs: Any) -> Any:
+        concurrency.llm_acquire()
+        return await self._llm.ainvoke(input, config, **kwargs)
+
+    def stream(self, input: Any, config: Any = None, **kwargs: Any) -> Any:
+        concurrency.llm_acquire()
+        return self._llm.stream(input, config, **kwargs)
+
+    async def astream(self, input: Any, config: Any = None, **kwargs: Any) -> Any:
+        concurrency.llm_acquire()
+        async for chunk in self._llm.astream(input, config, **kwargs):
+            yield chunk
+
+    def batch(self, inputs: list[Any], config: Any = None, **kwargs: Any) -> list[Any]:
+        for _ in inputs:
+            concurrency.llm_acquire()
+        return self._llm.batch(inputs, config, **kwargs)
+
+    async def abatch(self, inputs: list[Any], config: Any = None, **kwargs: Any) -> list[Any]:
+        for _ in inputs:
+            concurrency.llm_acquire()
+        return await self._llm.abatch(inputs, config, **kwargs)
+
+    # ---- Builders that return a different Runnable; wrap each so the chain
+    #      keeps the throttle when the user composes / uses structured output ----
+
+    def with_structured_output(self, *args: Any, **kwargs: Any) -> _ThrottledRunnable:
+        return _ThrottledRunnable(self._llm.with_structured_output(*args, **kwargs))
+
+    def bind_tools(self, *args: Any, **kwargs: Any) -> RateLimitedLLM:
+        return RateLimitedLLM(self._llm.bind_tools(*args, **kwargs))
+
+    def __or__(self, other: Any) -> _ThrottledRunnable:
+        return _ThrottledRunnable(self._llm | other)
+
+    def __ror__(self, other: Any) -> _ThrottledRunnable:
+        return _ThrottledRunnable(other | self._llm)
+
+    # ---- Everything else delegated to the underlying client ----
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._llm, name)
 
 
 def safe_structured_invoke(

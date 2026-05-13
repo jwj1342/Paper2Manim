@@ -184,6 +184,25 @@ def mvp1(input_arg: str, quality: str | None, no_render: bool, allow_render_on_l
     default=True,
     help="Use the dependency-free HashEmbedder instead of sentence-transformers. Useful for CI / offline bootstrap.",
 )
+@click.option(
+    "--scene-parallelism",
+    default=1,
+    type=int,
+    show_default=True,
+    help="Max concurrent scenes per paper (LangGraph Send fan-out). 1 = serial behavior identical to pre-refactor.",
+)
+@click.option(
+    "--render-concurrency",
+    default=None,
+    type=int,
+    help="Max concurrent Manim subprocesses across all scenes. Defaults to unbounded; recommended 2-4 when --scene-parallelism > 1.",
+)
+@click.option(
+    "--llm-rps",
+    default=None,
+    type=float,
+    help="Global LLM calls-per-second cap (token bucket, shared across all agents). Defaults to unlimited.",
+)
 def mvp2(
     pdf_path: str | None,
     arxiv_spec: str | None,
@@ -200,6 +219,9 @@ def mvp2(
     emb_failure_min_margin: float,
     emb_use_llm_distillers: bool,
     emb_use_real_embedder: bool,
+    scene_parallelism: int,
+    render_concurrency: int | None,
+    llm_rps: float | None,
 ) -> None:
     """MVP 2.0: paper -> multi-scene video with reflection loop.
 
@@ -209,7 +231,16 @@ def mvp2(
         raise click.UsageError("Provide exactly one of --pdf or --arxiv.")
     if not no_render:
         _block_login_node_render(allow_render_on_login)
+    from paper2manim import concurrency
     from paper2manim.graphs.mvp2 import build_mvp2_graph
+
+    # Configure process-global throttles BEFORE building the graph so that the
+    # first get_llm() / render() call inside any scene branch sees them.
+    concurrency.configure(
+        scene_parallelism=scene_parallelism,
+        render_concurrency=render_concurrency,
+        llm_rps=llm_rps,
+    )
 
     run_id = new_run_id()
     # Resolve EMB path now so the user sees the final location in logs even on
@@ -220,13 +251,11 @@ def mvp2(
         "attempts": [],
         "rendered_videos": [],
         "skipped_scenes": [],
-        "current_scene_idx": 0,
-        "iter_count": 0,
+        "scene_reports": [],
         "max_retries": max_retries or settings.PAPER2MANIM_MAX_RETRIES,
         "quality": quality or settings.PAPER2MANIM_QUALITY,  # type: ignore[typeddict-item]
         "skip_render": no_render,
         "vlm_enabled": vlm_enabled,
-        "vlm_revision_count": 0,
         "max_visual_revisions": max_visual_revisions,
         "visual_revision_decisions": [],
         "emb_enabled": emb_enabled,
@@ -256,15 +285,12 @@ def mvp2(
         state["arxiv_section"] = arxiv_section
         tag = f" §{arxiv_section}" if arxiv_section else ""
         console.print(f"[cyan]MVP 2.0 run {run_id}[/cyan] (arxiv): {arxiv_spec}{tag}")
-    # Recursion-limit budget: scene count isn't known until storyboarder runs, so
-    # estimate generously. Per scene worst case = 1 init + 1 emb_retrieve +
-    # (1+max_retries) text-reflect cycles (coder+render+reviewer, 3 nodes each)
-    # + max_visual_revisions VLM cycles (visual_revise+render+reviewer+
-    # frame_sampler+vlm_review, 5 nodes each) + the initial sampler+vlm_review
-    # pair + advance. Budget ~20 scenes plus upstream + emb_consolidate.
-    eff_retries = max_retries if max_retries is not None else settings.PAPER2MANIM_MAX_RETRIES
-    per_scene_budget = 5 + 3 * eff_retries + 5 * max_visual_revisions
-    recursion_limit = max(220, 18 + 20 * per_scene_budget)
+    # The parent graph is shallow (parser → summarizer → storyboarder →
+    # run_scene fan-out → concat → emb_consolidate); recursion limit just
+    # needs to cover the linear depth plus the Send fan-out step. The per-scene
+    # recursion budget is set inside ``run_scene_node`` against the compiled
+    # scene subgraph, not against this limit.
+    recursion_limit = 50
     g = build_mvp2_graph()
     final = g.invoke(state, config={"recursion_limit": recursion_limit})
     _print_summary(final)

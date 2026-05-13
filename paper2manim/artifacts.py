@@ -3,12 +3,20 @@
 from __future__ import annotations
 
 import json
+import threading
 import time
 import uuid
 from pathlib import Path
 from typing import Any
 
 from paper2manim.config.env import settings
+
+# Serializes concurrent ``append_trace`` writers. ``--scene-parallelism > 1``
+# fans out scenes onto LangGraph's thread pool, all of which share one
+# ``trace.jsonl`` per run. The OS-level append is atomic for individual
+# writes, but interleaved partial-line writes from multiple threads can still
+# corrupt the file under load — the lock is the simplest correctness fix.
+_TRACE_LOCK = threading.Lock()
 
 
 def new_run_id() -> str:
@@ -57,11 +65,15 @@ def save_attempt_result(run_id: str, scene: str, iter_idx: int, result: dict) ->
 
 
 def append_trace(run_id: str, node: str, payload: dict) -> None:
-    """Append a JSONL line to runs/<run_id>/trace.jsonl."""
+    """Append a JSONL line to runs/<run_id>/trace.jsonl.
+
+    Thread-safe under scene-parallel fan-out via :data:`_TRACE_LOCK`.
+    """
     p = run_dir(run_id) / "trace.jsonl"
     rec = {"ts": time.time(), "node": node, **payload}
-    with p.open("a", encoding="utf-8") as f:
-        f.write(json.dumps(rec, ensure_ascii=False, default=str) + "\n")
+    line = json.dumps(rec, ensure_ascii=False, default=str) + "\n"
+    with _TRACE_LOCK, p.open("a", encoding="utf-8") as f:
+        f.write(line)
 
 
 def copy_final_video(run_id: str, src: str, name: str) -> Path:

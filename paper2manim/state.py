@@ -75,44 +75,54 @@ class PaperState(TypedDict, total=False):
     # ---- Storyboard ----
     storyboard: Storyboard | None
 
-    # ---- Per-scene loop state ----
+    # ---- Per-scene mutables (LEGACY: mvp1 only) ----
+    # mvp2's per-scene loop now runs in a sub-graph with its own state shape
+    # (``paper2manim.graphs.scene_graph.SceneState``). These fields remain on
+    # PaperState so the simpler mvp1 graph (no fan-out) keeps working without
+    # a state-shape refactor. mvp2 nodes never read or write them; LangGraph
+    # would otherwise reject the parallel updates from each Send branch.
     current_scene_idx: int
     current_code: str | None
-
-    # ---- Reflection ----
-    attempts: Annotated[list[Attempt], operator.add]  # reducer: append
-    error_feedback: dict | None  # ErrorFeedback.model_dump() or None
-    max_retries: int
     iter_count: int
+    error_feedback: dict | None
+
+    # ---- Reflection caps ----
+    attempts: Annotated[list[Attempt], operator.add]  # reducer: append across scenes
+    max_retries: int
 
     # ---- Output ----
     rendered_videos: Annotated[list[str], operator.add]  # mp4 paths in scene order
-    skipped_scenes: Annotated[list[str], operator.add]  # scene names that gave up after retries
+    skipped_scenes: Annotated[list[str], operator.add]  # scenes that gave up after retries
     final_video_path: str | None
 
-    # ---- VLM Multi-Dim Scoring loop (MVP 3.0) ----
-    # `vlm_enabled` is a per-run toggle (set by CLI / build_mvp2_graph) that decides
-    # whether to insert frame_sampler + vlm_reviewer between render-success and advance.
-    # Counts and decisions are per-scene scoped (reset by init_scene_node when
-    # starting a new scene).
+    # ---- VLM caps + reducer outputs ----
     vlm_enabled: bool
-    vlm_revision_count: int  # how many visual revisions have run on the current scene
-    max_visual_revisions: int  # cap; advance once exceeded
+    # Per-scene cap; enforced inside the scene subgraph (mvp2 parallel path)
+    # or inline by the legacy mvp1 nodes.
+    max_visual_revisions: int
     # Each entry is ``{"scene": scene_name, "decision": "pass|revise|fail"}``.
     # The reducer keeps appending across the whole run; slicing by ``scene``
-    # gives you per-scene history without needing a per-scene reset.
+    # gives you per-scene history without needing a per-scene reset. (Schema
+    # introduced in PR #15.)
     visual_revision_decisions: Annotated[list[dict[str, str]], operator.add]
     # Scenes the VLM couldn't actually review — missing montage, VLM API
     # exception, or visual_revise_node hitting an exception. Distinct from:
     #   - ``skipped_scenes`` (text-reflection give_up after max_retries)
     #   - a recorded ``decision == "fail"`` in ``visual_revision_decisions``
     #     (the VLM did review and explicitly judged the scene unusable)
-    # The reducer accumulates across scenes; without it, the dict-merge
-    # default would silently overwrite earlier skips. Reported by Copilot
-    # review on PR #15.
+    # Reducer prevents earlier skips from being overwritten by later branches.
     vlm_skipped_scenes: Annotated[list[str], operator.add]
-    last_visual_review: dict | None  # the full review payload from vlm_scene_reviewer
-    current_montage_path: str | None  # latest frame montage produced for this scene
+    # One structured summary per scene (mvp2 parallel path only) — flushed
+    # back from each Send branch by ``scene_graph`` and reduced via
+    # ``operator.add``. Includes the final ``last_visual_review`` dict so
+    # post-run inspectors don't lose per-scene VLM detail (previously
+    # available as a top-level field, now scoped to SceneState).
+    scene_reports: Annotated[list[dict], operator.add]
+    # mvp1 (serial) still threads these three per-scene mutables on PaperState;
+    # mvp2's fan-out keeps them on SceneState instead and does not touch these.
+    vlm_revision_count: int  # mvp1 only
+    last_visual_review: dict | None  # mvp1 only
+    current_montage_path: str | None  # mvp1 only
 
     # ---- Episodic Memory Bank (MVP 3.0 §4.1 + §4.4) ----
     # Enabled by `--emb`. `emb_store_path` points at the directory holding
