@@ -115,9 +115,7 @@ def render_node(state: PaperState) -> dict[str, Any]:
         return {"fatal_error": "render: storyboard missing or malformed"}
     idx = state.get("current_scene_idx", 0)
     if idx >= len(sb["scenes"]):
-        return {
-            "fatal_error": f"render: scene_idx {idx} out of range (n_scenes={len(sb['scenes'])})"
-        }
+        return {"fatal_error": f"render: scene_idx {idx} out of range (n_scenes={len(sb['scenes'])})"}
     if not state.get("current_code"):
         return {"fatal_error": "render: current_code is empty"}
     scene = sb["scenes"][idx]
@@ -175,48 +173,53 @@ def frame_sampler_node(state: PaperState) -> dict[str, Any]:
     except FrameSamplerError as exc:
         log.warning("[frame_sampler] failed for %s: %s", scene_name, exc)
         return {"current_montage_path": None}
-    append_trace(
-        state["run_id"],
-        "frame_sampler",
-        {"scene": scene_name, "v_rev": vrev, "montage": str(out_png)},
-    )
+    append_trace(state["run_id"], "frame_sampler", {"scene": scene_name, "v_rev": vrev, "montage": str(out_png)})
     return {"current_montage_path": str(out_png)}
 
 
 def vlm_review_node(state: PaperState) -> dict[str, Any]:
-    """Run the VLM multi-dim review on the latest montage."""
+    """Run the VLM multi-dim review on the latest montage.
+
+    Failure modes intentionally short-circuit to ``decision="pass"`` (so the
+    scene's rendered video still ships) but record the scene in
+    ``vlm_skipped_scenes`` so the final summary surfaces that VLM didn't
+    actually sign off. This is distinct from a VLM-returned ``decision="fail"``,
+    which means the VLM did review and judged the scene unusable.
+    """
     montage = state.get("current_montage_path")
     sb = state.get("storyboard") or {}
     idx = state.get("current_scene_idx", 0)
     scenes = sb.get("scenes", [])
     if not montage or idx >= len(scenes):
-        # No montage / out of range — treat as auto-pass so we don't block.
-        log.warning("[vlm_review] missing montage or scene; auto-pass")
-        review = {
-            "scene_id": scenes[idx]["name"] if idx < len(scenes) else "<unknown>",
-            "decision": "pass",
-            "scores": {},
-            "revision_instruction": "",
+        scene_name = scenes[idx]["name"] if idx < len(scenes) else "<unknown>"
+        log.warning("[vlm_review] %s: missing montage or scene idx — skipping VLM", scene_name)
+        review = {"scene_id": scene_name, "decision": "pass", "scores": {},
+                  "revision_instruction": "",
+                  "skip_reason": "missing montage or scene idx"}
+        append_trace(
+            state["run_id"], "vlm_review",
+            {"scene": scene_name, "v_rev": state.get("vlm_revision_count", 0),
+             "decision": "pass", "skipped": True, "skip_reason": review["skip_reason"]},
+        )
+        return {
+            "last_visual_review": review,
+            "visual_revision_decisions": [{"scene": scene_name, "decision": "pass"}],
+            "vlm_skipped_scenes": [scene_name],
         }
-        return {"last_visual_review": review, "visual_revision_decisions": ["pass"]}
     scene = scenes[idx]
     summary = state.get("summary")
+    skipped = False
+    skip_reason = ""
     try:
         review = review_scene(scene, montage, summary=summary, scene_idx=idx)
     except Exception as exc:
-        log.warning(
-            "[vlm_review] %s raised %s: %s — auto-pass to keep graph moving",
-            scene["name"],
-            type(exc).__name__,
-            exc,
-        )
-        review = {
-            "scene_id": scene["name"],
-            "decision": "pass",
-            "scores": {},
-            "revision_instruction": "",
-            "raw_response": f"{type(exc).__name__}: {exc}",
-        }
+        skipped = True
+        skip_reason = f"{type(exc).__name__}: {exc}"
+        log.warning("[vlm_review] %s raised %s — skipping VLM (scene still ships)",
+                    scene["name"], skip_reason)
+        review = {"scene_id": scene["name"], "decision": "pass", "scores": {},
+                  "revision_instruction": "", "raw_response": skip_reason,
+                  "skip_reason": skip_reason}
     append_trace(
         state["run_id"],
         "vlm_review",
@@ -224,17 +227,31 @@ def vlm_review_node(state: PaperState) -> dict[str, Any]:
             "scene": scene["name"],
             "v_rev": state.get("vlm_revision_count", 0),
             "decision": review.get("decision"),
+            "raw_decision": review.get("raw_decision"),
+            "average_score": review.get("average_score"),
             "scores": review.get("scores"),
+            **({"skipped": True, "skip_reason": skip_reason} if skipped else {}),
         },
     )
-    return {
+    out: dict[str, Any] = {
         "last_visual_review": review,
-        "visual_revision_decisions": [str(review.get("decision", "pass"))],
+        "visual_revision_decisions": [
+            {"scene": scene["name"], "decision": str(review.get("decision", "pass"))}
+        ],
     }
+    if skipped:
+        out["vlm_skipped_scenes"] = [scene["name"]]
+    return out
 
 
 def visual_revise_node(state: PaperState) -> dict[str, Any]:
-    """Apply the VLM's revision_instruction to the current Manim source."""
+    """Apply the VLM's revision_instruction to the current Manim source.
+
+    On revise_code() failure (rate-limit, API error, parse error in the rewrite)
+    we keep the prior code AND force the visual-revision counter past the cap,
+    so the next ``post_vlm_route`` advances instead of looping back through
+    another wasted revise→render cycle on the unchanged code.
+    """
     sb = state.get("storyboard") or {}
     idx = state.get("current_scene_idx", 0)
     scenes = sb.get("scenes", [])
@@ -245,17 +262,28 @@ def visual_revise_node(state: PaperState) -> dict[str, Any]:
     current = state.get("current_code") or ""
     new_count = state.get("vlm_revision_count", 0) + 1
     log.info("[visual_revise] scene=%s v_rev=%d", scene["name"], new_count)
+    revise_failed = False
     try:
         new_code = revise_code(scene, current, review, summary=state.get("summary"))
     except Exception as exc:
-        log.warning("[visual_revise] %s raised %s — keeping prior code", scene["name"], exc)
+        revise_failed = True
+        log.warning(
+            "[visual_revise] %s raised %s — keeping prior code and forcing advance",
+            scene["name"], exc,
+        )
         new_code = current
     if state.get("run_id"):
-        # Save under a distinct tag so we can compare pre/post revisions in the run dir.
-        save_attempt_code(
-            state["run_id"], f"{scene['name']}_v{new_count}", state.get("iter_count", 0), new_code
+        save_attempt_code(state["run_id"], f"{scene['name']}_v{new_count}", state.get("iter_count", 0), new_code)
+        append_trace(
+            state["run_id"], "visual_revise",
+            {"scene": scene["name"], "v_rev": new_count,
+             **({"failed": True} if revise_failed else {})},
         )
-        append_trace(state["run_id"], "visual_revise", {"scene": scene["name"], "v_rev": new_count})
+    if revise_failed:
+        # Bump the counter past max so post_vlm_route's cap check advances next.
+        cap = int(state.get("max_visual_revisions", 2))
+        return {"current_code": new_code, "vlm_revision_count": cap + 1,
+                "vlm_skipped_scenes": [scene["name"]]}
     return {"current_code": new_code, "vlm_revision_count": new_count}
 
 
@@ -290,7 +318,9 @@ def concat_node(state: PaperState) -> dict[str, Any]:
         return {"fatal_error": "concat: no successful scenes to concatenate"}
     out_path = run_dir(state["run_id"]) / "final" / "output.mp4"
     final = concat_videos(videos, out_path)
-    append_trace(state["run_id"], "concat", {"n_videos": len(videos), "final": str(final)})
+    append_trace(
+        state["run_id"], "concat", {"n_videos": len(videos), "final": str(final)}
+    )
     return {"final_video_path": str(final)}
 
 
@@ -337,13 +367,9 @@ def post_vlm_route(state: PaperState) -> Literal["visual_revise", "advance"]:
     if decision == "pass":
         return "advance"
     if decision == "fail":
-        # Soft-fail policy (intentional): a "fail" verdict from the VLM is logged
-        # in trace.jsonl + last_visual_review but does NOT exclude the scene from
-        # rendered_videos — the render itself succeeded, and at this VLM
-        # maturity (Claude rarely self-passes, see docs/vlm_experiment.md) a
-        # strict-fail policy would frequently leave final/output.mp4 empty. If
-        # we ever want strict-fail, gate it on a CLI flag and have
-        # advance_scene_node consult last_visual_review.decision.
+        # Treat as terminal — advance and record as skipped via the success/failure
+        # check in advance_scene_node (rendered video still gets included since
+        # the underlying render technically succeeded).
         return "advance"
     # decision == "revise"
     if state.get("vlm_revision_count", 0) >= state.get("max_visual_revisions", 2):

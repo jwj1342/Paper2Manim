@@ -78,22 +78,13 @@ def _seed_env_from_dotenv() -> None:
 
     pydantic-settings only injects fields it explicitly declares; anything else
     in ``.env`` (e.g. ``AZURE_CLAUDE_API_KEY``) is ignored. The YAML loader,
-    however, reads ``os.environ`` directly. This shim copies any unseen keys
-    from ``.env`` into the process env without clobbering already-set values.
+    however, reads ``os.environ`` directly. Delegate to ``python-dotenv``
+    (already a dependency) with ``override=False`` so process env wins over
+    ``.env``.
     """
-    import os
+    from dotenv import load_dotenv
 
-    dotenv = PROJECT_ROOT / ".env"
-    if not dotenv.exists():
-        return
-    for line in dotenv.read_text(encoding="utf-8").splitlines():
-        s = line.strip()
-        if not s or s.startswith("#") or "=" not in s:
-            continue
-        k, v = s.split("=", 1)
-        k = k.strip()
-        v = v.strip().strip('"').strip("'")
-        os.environ.setdefault(k, v)
+    load_dotenv(PROJECT_ROOT / ".env", override=False)
 
 
 @lru_cache(maxsize=1)
@@ -118,6 +109,27 @@ def _yaml_settings() -> ModelSettings | None:
 def reload_config() -> None:
     """Drop the cached :class:`ModelSettings` so the next call re-reads YAML."""
     _yaml_settings.cache_clear()
+
+
+def vision_checker_config() -> ModelConfig:
+    """Return the cached :class:`ModelConfig` bound to the ``vision_checker`` role.
+
+    Raises ``RuntimeError`` if no ``config.yaml`` is present or no model is bound
+    to ``vision_checker``. Used by the VLM agent to avoid re-parsing YAML on
+    every review (one parse per process instead of one per scene-revision).
+    """
+    settings = _yaml_settings()
+    if settings is None:
+        raise RuntimeError(
+            "VLM review requires config.yaml with a supports_vision=true model "
+            "bound to role 'vision_checker'."
+        )
+    try:
+        return settings.model_for_role("vision_checker")
+    except KeyError as exc:
+        raise RuntimeError(
+            f"config.yaml has no model bound to role 'vision_checker'. {exc}"
+        ) from exc
 
 
 def _resolve_role(name: str) -> str:

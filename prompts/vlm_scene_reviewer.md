@@ -31,12 +31,9 @@ The JSON must match this structure:
   "attempt": integer | null,
   "decision": "pass" | "revise" | "fail",
   "scores": {
-    "paper_alignment": integer,
-    "visual_clarity": integer,
-    "readability": integer,
-    "layout_balance": integer,
-    "visual_focus": integer,
-    "animation_perceived": integer
+    "logic_flow": integer,
+    "layout_occlusion": integer,
+    "accuracy": integer
   },
   "issues": [
     {
@@ -52,19 +49,34 @@ The JSON must match this structure:
   "metadata": {}
 }
 
-Score range:
-1 = very poor
-2 = weak
-3 = acceptable
-4 = good
-5 = excellent
+Score Range (0–100, integer):
+- logic_flow: does the visual narrate the SceneSpec claim end-to-end? Does the
+  animation beat sequence read coherently from open to takeaway? 0 = the scene
+  shows something unrelated; 100 = the rendered frames make the claim visually
+  obvious without external context.
+- layout_occlusion: is the scene readable? Score down for text overlap,
+  cropped objects, labels colliding with the main visual, wall-of-text, or
+  empty/wasted space that buries the focus. 0 = unreadable; 100 = clean layout
+  with the main visual unambiguous.
+- accuracy: are the mathematical symbols, formulas, axes, ratios, and
+  labels correct and consistent with paper_claim / paper_evidence? 0 = visible
+  errors (wrong sign, mismatched variables, swapped axes); 100 = nothing
+  factually wrong on screen.
+
+Decision Rules:
+- pass: the scene is visually clear enough and matches the SceneSpec.
+  Prefer pass when the average of the three scores is high (~90+).
+- revise: the scene has local visual issues that can be fixed by changing
+  layout, scale, labels, emphasis, or timing without rethinking the plan.
+- fail: the scene is unreadable, empty, completely mismatched, or impossible
+  to assess.
 
 Required Behavior:
 1. Judge only this single scene.
 2. Evaluate whether the rendered frames communicate the SceneSpec.
 3. Check if the paper_claim is visually supported.
 4. Check if final_takeaway is visible and understandable.
-5. Detect local visual problems:
+5. Detect local visual problems and surface them in `issues[]`:
    - text_overlap
    - chart_label_overlap
    - unreadable_text
@@ -77,10 +89,7 @@ Required Behavior:
    - animation_unclear
    - frames_too_static
 6. Give concrete revision instructions if decision is revise.
-7. Prefer decision=revise for fixable local visual issues.
-8. Use decision=pass if the scene is clear enough.
-9. Use decision=fail only if the scene is unusable or severely mismatched.
-10. Set requires_replanning=false by default.
+7. Set requires_replanning=false by default.
 
 Forbidden Behavior:
 1. Do not generate Manim code.
@@ -90,14 +99,6 @@ Forbidden Behavior:
 5. Do not give global video narrative suggestions unless the scene is completely mismatched.
 6. Do not output Markdown.
 7. Do not include prose outside JSON.
-
-Decision Rules:
-- pass:
-  The scene is visually clear enough and matches the SceneSpec.
-- revise:
-  The scene has local visual issues that can be fixed by changing layout, scale, labels, emphasis, or timing.
-- fail:
-  The scene is unreadable, empty, completely mismatched, or impossible to assess.
 
 Quality Criteria:
 A good review should:

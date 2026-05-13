@@ -98,7 +98,10 @@ class PaperState(TypedDict, total=False):
     vlm_enabled: bool
     vlm_revision_count: int  # how many visual revisions have run on the current scene
     max_visual_revisions: int  # cap; advance once exceeded
-    visual_revision_decisions: Annotated[list[str], operator.add]
+    # Each entry is ``{"scene": scene_name, "decision": "pass|revise|fail"}``.
+    # The reducer keeps appending across the whole run; slicing by ``scene``
+    # gives you per-scene history without needing a per-scene reset.
+    visual_revision_decisions: Annotated[list[dict[str, str]], operator.add]
     last_visual_review: dict | None  # the full review payload from vlm_scene_reviewer
     current_montage_path: str | None  # latest frame montage produced for this scene
 

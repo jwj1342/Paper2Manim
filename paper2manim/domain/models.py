@@ -724,32 +724,23 @@ class RunSummary:
 
 @dataclass(frozen=True)
 class VisualReviewScores:
-    paper_alignment: int
-    visual_clarity: int
-    readability: int
-    layout_balance: int
-    visual_focus: int
-    animation_perceived: int
+    logic_flow: int
+    layout_occlusion: int
+    accuracy: int
 
     @classmethod
     def from_dict(cls, value: dict[str, Any]) -> VisualReviewScores:
         return cls(
-            paper_alignment=_int(value.get("paper_alignment"), 1),
-            visual_clarity=_int(value.get("visual_clarity"), 1),
-            readability=_int(value.get("readability"), 1),
-            layout_balance=_int(value.get("layout_balance"), 1),
-            visual_focus=_int(value.get("visual_focus"), 1),
-            animation_perceived=_int(value.get("animation_perceived"), 1),
+            logic_flow=_int(value.get("logic_flow"), 0),
+            layout_occlusion=_int(value.get("layout_occlusion"), 0),
+            accuracy=_int(value.get("accuracy"), 0),
         )
 
     def to_dict(self) -> dict[str, Any]:
         return {
-            "paper_alignment": self.paper_alignment,
-            "visual_clarity": self.visual_clarity,
-            "readability": self.readability,
-            "layout_balance": self.layout_balance,
-            "visual_focus": self.visual_focus,
-            "animation_perceived": self.animation_perceived,
+            "logic_flow": self.logic_flow,
+            "layout_occlusion": self.layout_occlusion,
+            "accuracy": self.accuracy,
         }
 
 
