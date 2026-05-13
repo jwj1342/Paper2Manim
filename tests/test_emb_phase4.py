@@ -387,9 +387,7 @@ class TestEMBConsolidation:
                     "scene_id": "Scene1",
                     "decision": "revise",
                     "scores": {
-                        "paper_alignment": 2, "visual_clarity": 2,
-                        "readability": 2, "layout_balance": 2,
-                        "visual_focus": 2, "animation_perceived": 2,
+                        "logic_flow": 30, "layout_occlusion": 30, "accuracy": 30,
                     },
                     "revision_instruction": "fix layout",
                     "raw_response": "",
@@ -398,9 +396,7 @@ class TestEMBConsolidation:
                 "scene_id": "Scene1",
                 "decision": "pass",
                 "scores": {
-                    "paper_alignment": 5, "visual_clarity": 5,
-                    "readability": 5, "layout_balance": 5,
-                    "visual_focus": 5, "animation_perceived": 5,
+                    "logic_flow": 90, "layout_occlusion": 90, "accuracy": 90,
                 },
                 "revision_instruction": "",
                 "raw_response": "",
@@ -434,20 +430,20 @@ class TestEMBConsolidation:
                 "max_visual_revisions": 2,
                 "visual_revision_decisions": [],
                 "emb_enabled": True,
-                "emb_theta_high": 4.0,
+                "emb_theta_high": 85.0,
                 "emb_use_llm_distillers": False,
                 "emb_instance": emb,
             }
         )
         assert out["final_video_path"].endswith("output.mp4")
-        # Final high-score scene → 1 success record
+        # Final high-score scene → 1 success record (avg 90 ≥ theta 85)
         assert emb.count(polarity="success") == 1
-        # Validated visual transition (low → high) → 1 failure record
+        # Validated visual transition (30 → 90, margin 60 ≥ default 5.0) → 1 failure record
         assert emb.count(polarity="failure") == 1
         fail_rec = emb.all(polarity="failure")[0]
         assert fail_rec.provenance.extraction_source == "visual_reflection"
-        assert fail_rec.provenance.before_score == 2.0
-        assert fail_rec.provenance.after_score == 5.0
+        assert fail_rec.provenance.before_score == 30.0
+        assert fail_rec.provenance.after_score == 90.0
 
 
 # --------------------------------------------------------------------------- #

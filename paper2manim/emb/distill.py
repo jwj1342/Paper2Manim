@@ -131,20 +131,37 @@ class VisualTransition:
 # --------------------------------------------------------------------------- #
 
 
+# Proposal §4.2 canonical 3-dim 0-100 schema, mirrored from
+# paper2manim/agents/vlm_scene_reviewer.py:_SCORE_KEYS. Keep these two in sync —
+# if the reviewer's schema drifts (back to 6-dim 1-5, etc.) the consolidate
+# pipeline silently writes zero records, which is exactly the bug fixed here.
 _SCORE_KEYS = (
-    "paper_alignment",
-    "visual_clarity",
-    "readability",
-    "layout_balance",
-    "visual_focus",
-    "animation_perceived",
+    "logic_flow",
+    "layout_occlusion",
+    "accuracy",
 )
 
 
-def _avg_score(scores: dict[str, int] | None) -> float:
+def _avg_score(scores: dict[str, int | None] | None) -> float:
+    """Mean of the three canonical dimensions on a 0–100 scale.
+
+    Skips ``None`` entries so a partial review (one dim missing) still produces
+    a defensible average over the present dims, matching how
+    :func:`paper2manim.agents.vlm_scene_reviewer.parse_vlm_response` treats
+    missing dimensions. Returns 0.0 only when *no* dim has a numeric value —
+    that case is what trips the consolidation gate, which is the intended
+    behavior for unparseable VLM output.
+    """
     if not scores:
         return 0.0
-    nums = [int(v) for k, v in scores.items() if k in _SCORE_KEYS]
+    nums: list[float] = []
+    for k, v in scores.items():
+        if k not in _SCORE_KEYS or v is None:
+            continue
+        try:
+            nums.append(float(v))
+        except (TypeError, ValueError):
+            continue
     return sum(nums) / len(nums) if nums else 0.0
 
 
@@ -295,13 +312,14 @@ def find_visual_transitions(
     scenes: Iterable[SceneEvents],
     *,
     final_text_iter_by_scene: dict[str, int] | None = None,
-    min_margin: float = 0.5,
+    min_margin: float = 5.0,
 ) -> list[VisualTransition]:
     """VLM (v=k, score=s_k) → (v=k+1, score=s_{k+1}) where s_{k+1} − s_k ≥ ``min_margin``.
 
-    ``min_margin`` (default 0.5 on the 1–5 avg scale) filters out marginal
-    score wiggles that don't represent a real learnable transition. Set to a
-    tiny epsilon (e.g. 0.01) to keep every strictly-improved pair.
+    ``min_margin`` (default 5.0 on the 0–100 avg scale, mirroring the proposal
+    §4.2 schema) filters out marginal score wiggles that don't represent a real
+    learnable transition. Set to a tiny epsilon (e.g. 0.5) to keep every
+    strictly-improved pair.
 
     ``final_text_iter_by_scene`` maps each scene name to the iter_idx that the
     text reflection settled on — that's the iter under which all v_rev files
@@ -537,15 +555,18 @@ def distill_success_records(
     run_id: str,
     *,
     state: dict[str, Any] | None = None,
-    theta_high: float = 4.0,
+    theta_high: float = 85.0,
     source_paper: str = "",
     source_section: str = "",
     rationale_writer: RationaleWriter | None = None,
 ) -> list[MemoryRecord]:
     """One ``MemoryRecord`` per scene whose final avg score ≥ ``theta_high``.
 
-    If ``theta_high <= 0``, scenes without VLM scoring still qualify (useful
-    for MVP 2.0-style bootstrap where the VLM loop is disabled).
+    Default ``theta_high=85.0`` matches the proposal §4.2 0–100 schema; it sits
+    just below the §4.3 auto-pass threshold (90) so scenes the VLM
+    bypass-passes also qualify as success records. If ``theta_high <= 0``,
+    scenes without VLM scoring still qualify (useful for MVP 2.0-style
+    bootstrap where the VLM loop is disabled).
     """
     rw = rationale_writer or default_rationale_writer
     desc = _scene_description_lookup(state)
@@ -587,11 +608,12 @@ def distill_failure_records(
     lesson_distiller: LessonDistiller | None = None,
     include_text_transitions: bool = True,
     include_visual_transitions: bool = True,
-    failure_min_margin: float = 0.5,
+    failure_min_margin: float = 5.0,
 ) -> list[MemoryRecord]:
     """One record per validated transition. ``after_score − before_score ≥
     failure_min_margin`` enforced inside :func:`find_visual_transitions`; text
-    transitions are validated by ``error → success``."""
+    transitions are validated by ``error → success``. Default 5.0 is on the
+    proposal §4.2 0–100 scale."""
     ld = lesson_distiller or default_lesson_distiller
     desc = _scene_description_lookup(state)
     scenes = parse_trace(run_id)
@@ -684,12 +706,12 @@ def consolidate_run(
     emb: EpisodicMemoryBank,
     *,
     state: dict[str, Any] | None = None,
-    theta_high: float = 4.0,
+    theta_high: float = 85.0,
     source_paper: str = "",
     source_section: str = "",
     rationale_writer: RationaleWriter | None = None,
     lesson_distiller: LessonDistiller | None = None,
-    failure_min_margin: float = 0.5,
+    failure_min_margin: float = 5.0,
 ) -> ConsolidationReport:
     """End-to-end §4.4 sink for one paper-section run.
 

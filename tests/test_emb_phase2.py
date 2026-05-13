@@ -75,35 +75,26 @@ def _write_montage(run_id: str, scene: str, v_rev: int) -> None:
 
 
 def _high_scores() -> dict:
-    return {k: 5 for k in (
-        "paper_alignment",
-        "visual_clarity",
-        "readability",
-        "layout_balance",
-        "visual_focus",
-        "animation_perceived",
-    )}
+    """3-dim 0-100 schema (proposal §4.2). Average = 90.0."""
+    return {k: 90 for k in ("logic_flow", "layout_occlusion", "accuracy")}
 
 
 def _low_scores() -> dict:
-    return {k: 2 for k in (
-        "paper_alignment",
-        "visual_clarity",
-        "readability",
-        "layout_balance",
-        "visual_focus",
-        "animation_perceived",
-    )}
+    """3-dim 0-100 schema. Average = 30.0."""
+    return {k: 30 for k in ("logic_flow", "layout_occlusion", "accuracy")}
 
 
 def _mid_scores() -> dict:
-    return {k: 3 for k in (
-        "paper_alignment",
-        "visual_clarity",
-        "readability",
-        "layout_balance",
-        "visual_focus",
-        "animation_perceived",
+    """3-dim 0-100 schema. Average = 60.0."""
+    return {k: 60 for k in ("logic_flow", "layout_occlusion", "accuracy")}
+
+
+def _legacy_6dim_scores() -> dict:
+    """Pre-PR-#15 schema; kept here so the regression test for schema drift
+    can confirm the new ``_avg_score`` returns 0.0 on these payloads."""
+    return {k: 5 for k in (
+        "paper_alignment", "visual_clarity", "readability",
+        "layout_balance", "visual_focus", "animation_perceived",
     )}
 
 
@@ -130,7 +121,7 @@ class TestParseTrace:
         assert set(out.keys()) == {"S1", "S2"}
         assert len(out["S1"].renders) == 1
         assert len(out["S1"].vlm_reviews) == 1
-        assert out["S1"].vlm_reviews[0].avg_score == 5.0
+        assert out["S1"].vlm_reviews[0].avg_score == 90.0
         assert len(out["S2"].renders) == 2
         assert out["S2"].vlm_reviews == []
 
@@ -240,8 +231,8 @@ class TestVisualTransitions:
         out = find_visual_transitions(run_id, scenes.values())
         assert len(out) == 1
         t = out[0]
-        assert t.before_score == 2.0
-        assert t.after_score == 5.0
+        assert t.before_score == 30.0
+        assert t.after_score == 90.0
         assert t.before_code == "v0 code"
         assert t.after_code == "v1 code"
 
@@ -263,15 +254,12 @@ class TestVisualTransitions:
         assert find_visual_transitions(run_id, scenes.values()) == []
 
     def test_respects_min_margin(self):
-        # before=3.0, after=3.33 (one dim bumped 2→4). Strict-positive but
-        # below the default 0.5 margin, so should be filtered.
+        # before=60.0, after=62.67 (one dim bumped 60→68 on the 0-100 schema).
+        # Strict-positive but below the default 5.0 margin, so should be filtered.
         run_id = "rid_vis_margin"
-        scores_lo = {k: 3 for k in (
-            "paper_alignment","visual_clarity","readability",
-            "layout_balance","visual_focus","animation_perceived",
-        )}
+        scores_lo = dict(_mid_scores())
         scores_hi = dict(scores_lo)
-        scores_hi["paper_alignment"] = 5  # bumps avg by 2/6 ≈ 0.33
+        scores_hi["logic_flow"] = 68  # bumps avg by 8/3 ≈ 2.67
         _write_trace(
             run_id,
             [
@@ -285,10 +273,10 @@ class TestVisualTransitions:
         _write_attempt_code(run_id, "S1", 0, 0, "v0")
         _write_attempt_code(run_id, "S1", 0, 1, "v1")
         scenes = parse_trace(run_id)
-        # Default margin 0.5: rejected.
+        # Default margin 5.0: rejected.
         assert find_visual_transitions(run_id, scenes.values()) == []
-        # Lower margin 0.1: accepted.
-        out = find_visual_transitions(run_id, scenes.values(), min_margin=0.1)
+        # Lower margin 1.0: accepted.
+        out = find_visual_transitions(run_id, scenes.values(), min_margin=1.0)
         assert len(out) == 1
 
     def test_rejects_equal_score(self):
@@ -348,7 +336,7 @@ class TestScoredScenes:
         assert len(out) == 1
         sc = out[0]
         assert sc.final_v_rev == 1
-        assert sc.final_score == 5.0
+        assert sc.final_score == 90.0
         assert sc.final_code == "v1 code"
         assert sc.had_vlm_review is True
         assert str(sc.final_video_path).endswith("x.mp4")
@@ -375,20 +363,20 @@ class TestScoredScenes:
 class TestDefaultWriters:
     def test_default_rationale_contains_score_and_name(self):
         sc = ScoredScene(
-            name="S1", final_v_rev=2, final_score=4.33,
+            name="S1", final_v_rev=2, final_score=87.50,
             final_code="from manim import *", final_montage_path=None,
             final_video_path=None, had_vlm_review=True,
         )
         out = default_rationale_writer(sc, "a description")
         assert "S1" in out
-        assert "4.33" in out
+        assert "87.50" in out
         assert len(out) <= 400
 
     def test_default_lesson_distiller_visual_transition(self):
         vt = VisualTransition(
             scene="S1", before_v_rev=0, after_v_rev=1,
             before_code="x = 1\ny = 2", after_code="x = 1\ny = 3",
-            before_score=2.0, after_score=3.0,
+            before_score=30.0, after_score=60.0,
             revision_instruction="adjust value",
         )
         body = default_lesson_distiller(vt, "scene desc")
@@ -433,7 +421,7 @@ class TestDistillSuccess:
         out = distill_success_records(
             run_id,
             state=_fake_state("S1", "S2"),
-            theta_high=4.0,
+            theta_high=85.0,
             source_paper="arxiv:test",
             source_section="Background",
         )
@@ -501,8 +489,8 @@ class TestDistillFailure:
         rec = out[0]
         assert rec.polarity == "failure"
         assert rec.provenance.validated is True
-        assert rec.provenance.before_score == 2.0
-        assert rec.provenance.after_score == 5.0
+        assert rec.provenance.before_score == 30.0
+        assert rec.provenance.after_score == 90.0
         assert rec.context.source_paper == "arxiv:test"
 
     def test_text_transition_emitted(self):
@@ -601,7 +589,7 @@ class TestConsolidateRun:
         report = consolidate_run(
             run_id, emb,
             state=_fake_state("S1"),
-            theta_high=4.0,
+            theta_high=85.0,
             source_paper="arxiv:test",
             source_section="Background",
         )
