@@ -156,6 +156,10 @@ def parse_vlm_response(raw: str, scene_id: str) -> dict[str, Any]:
     ``revise`` but the average of the three dimensions is high enough, treat
     it as a pass. The original decision is kept on ``raw_decision`` for the
     trace so we can audit how often the bypass fires.
+
+    The bypass requires **all three** dimensions to be present — otherwise a
+    model that returned only ``{"logic_flow": 100}`` would average to 100 over
+    a single sample and spuriously upgrade. See Copilot review on PR #15.
     """
     blob = _extract_first_json_object(raw or "")
     if not blob:
@@ -170,7 +174,13 @@ def parse_vlm_response(raw: str, scene_id: str) -> dict[str, Any]:
     scores = _coerce_scores(obj.get("scores"))
     raw_decision = decision
     avg = _average_score(scores)
-    if decision == "revise" and avg is not None and avg >= _AUTO_PASS_AVG:
+    all_dims_present = all(v is not None for v in scores.values())
+    if (
+        decision == "revise"
+        and all_dims_present
+        and avg is not None
+        and avg >= _AUTO_PASS_AVG
+    ):
         decision = "pass"
     return {
         "scene_id": str(obj.get("scene_id") or scene_id),

@@ -367,9 +367,14 @@ def post_vlm_route(state: PaperState) -> Literal["visual_revise", "advance"]:
     if decision == "pass":
         return "advance"
     if decision == "fail":
-        # Treat as terminal — advance and record as skipped via the success/failure
-        # check in advance_scene_node (rendered video still gets included since
-        # the underlying render technically succeeded).
+        # Soft-fail: the underlying render succeeded, so the rendered video
+        # still ships via advance_scene_node — that function appends to
+        # rendered_videos based solely on render_result.status and never
+        # consults the VLM verdict. The fail decision is preserved in
+        # ``visual_revision_decisions`` + ``trace.jsonl`` for audit. We treat
+        # fail as terminal: no further visual_revise attempts on this scene,
+        # but the scene is NOT added to ``skipped_scenes``. Comment corrected
+        # per Copilot review on PR #15.
         return "advance"
     # decision == "revise"
     if state.get("vlm_revision_count", 0) >= state.get("max_visual_revisions", 2):

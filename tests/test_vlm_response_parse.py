@@ -109,3 +109,21 @@ def test_no_auto_pass_when_scores_missing():
     result = parse_vlm_response(raw, "S1")
     assert result["decision"] == "revise"
     assert result["average_score"] is None
+
+
+def test_no_auto_pass_when_only_one_dim_present_even_if_perfect():
+    """Bypass must require ALL three dimensions present.
+
+    Otherwise a VLM that returns just ``{logic_flow: 100}`` would have
+    ``_average_score()`` compute 100 over a single sample and spuriously
+    upgrade revise→pass. Reported by Copilot review on PR #15.
+    """
+    raw = '{"scene_id": "S1", "decision": "revise", "scores": {"logic_flow": 100}}'
+    result = parse_vlm_response(raw, "S1")
+    assert result["decision"] == "revise", "missing dims must block the bypass"
+    assert result["raw_decision"] == "revise"
+    assert result["scores"]["logic_flow"] == 100
+    assert result["scores"]["layout_occlusion"] is None
+    assert result["scores"]["accuracy"] is None
+    # average_score still reflects the present-only mean for auditability.
+    assert result["average_score"] == 100
