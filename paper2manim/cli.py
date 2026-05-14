@@ -65,6 +65,13 @@ def cli(verbose: bool) -> None:
     setup_logging(level=logging.DEBUG if verbose else logging.INFO)
 
 
+# Register subcommand groups. Imported here (not at top of file) so the
+# heavy emb stack doesn't load on every ``paper2manim mvp1`` invocation.
+from paper2manim.cli_emb import emb_group as _emb_group  # noqa: E402
+
+cli.add_command(_emb_group)
+
+
 @cli.command()
 @click.option(
     "--input",

@@ -126,6 +126,12 @@ class Provenance(BaseModel):
     before_score: float | None = Field(default=None, description="Failure: low-score version")
     after_score: float | None = Field(default=None, description="Failure: high-score version")
     vlm_score: float | None = Field(default=None, description="Success: final VLM score")
+    # Visual revision idx that produced ``vlm_score``. ``retest`` needs this to
+    # locate the correct ``vlm_frames/<scene>_v<n>.png``: ``vlm_score`` is the
+    # score of the *accepted* version (often v1/v2 after a revision), so reading
+    # back the v0 montage and comparing to ``vlm_score`` would always look like
+    # decay. Default 0 (legacy / no-VLM records).
+    final_v_rev: int = Field(default=0, ge=0, description="Success: v_rev that produced vlm_score")
     hit_count: int = Field(default=0, ge=0)
     first_seen: float = Field(default_factory=time.time)
     last_used: float | None = Field(default=None)

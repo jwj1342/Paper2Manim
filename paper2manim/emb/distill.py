@@ -599,6 +599,10 @@ def distill_success_records(
             extraction_source="high_score_scene",
             validated=True,
             vlm_score=sc.final_score if sc.had_vlm_review else None,
+            # Pin the v_rev whose montage corresponds to ``vlm_score`` so
+            # ``paper2manim emb retest`` can re-score the right frame instead
+            # of always loading ``_v0.png``.
+            final_v_rev=sc.final_v_rev,
         )
         out.append(MemoryRecord(polarity="success", context=ctx, body=body, provenance=prov))
     return out
