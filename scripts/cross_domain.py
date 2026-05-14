@@ -19,8 +19,10 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import subprocess
 import sys
 import time
+from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
@@ -64,12 +66,34 @@ def _read_tasks(csv_path: Path, *, domain: str, split: str) -> list[dict]:
 
 
 def _run_one(
-    task: dict, *, base_args: list[str], quality: str, dry_run: bool
+    task: dict,
+    *,
+    base_args: list[str],
+    quality: str,
+    dry_run: bool,
+    timeout_s: float | None = None,
+    runner: Callable[..., subprocess.CompletedProcess] | None = None,
+    python: str | None = None,
 ) -> TaskOutcome:
-    from click.testing import CliRunner
+    """Run one ``paper2manim mvp2`` invocation in an isolated subprocess.
 
-    from paper2manim.cli import cli as paper2manim_cli
+    See ``scripts/run_experiment.py::_invoke_one`` — same rationale: the
+    in-process ``click.testing.CliRunner`` form leaks module state across
+    tasks, has no crash isolation, no enforceable timeout, and accumulates
+    Manim memory. For an experiment driver that runs N×M×K tasks unattended,
+    those are real failure modes, not theoretical ones.
 
+    Exit codes on subprocess failures (mirrors GNU/shell convention so reports
+    stay readable):
+
+    - ``124`` — :class:`subprocess.TimeoutExpired`
+    - ``127`` — interpreter / package not found
+    -  ``99`` — any other unexpected runner exception (kept distinct from 1/2
+       which the CLI itself emits, so post-hoc triage can tell the two apart)
+
+    The ``runner`` parameter is a test seam: any callable with the
+    ``subprocess.run`` signature works; production callers leave it ``None``.
+    """
     args = [
         "mvp2",
         "--arxiv", task["arxiv_id"],
@@ -82,15 +106,29 @@ def _run_one(
         args.append("--no-render")
 
     started = time.time()
-    runner = CliRunner(mix_stderr=False)
+    runner_fn = runner or subprocess.run
+    cmd = [python or sys.executable, "-m", "paper2manim", *args]
+    out = ""
+    err_tail = ""
     try:
-        result = runner.invoke(paper2manim_cli, args, catch_exceptions=True)
-        exit_code = result.exit_code
-        out = result.output or ""
-        err_tail = (result.stderr or "")[-300:] if hasattr(result, "stderr") else ""
+        result = runner_fn(
+            cmd, capture_output=True, text=True, timeout=timeout_s,
+        )
+        exit_code = int(result.returncode)
+        out = result.stdout or ""
+        err_tail = (result.stderr or "").strip()[-300:]
+    except subprocess.TimeoutExpired as exc:
+        exit_code = 124
+        partial = exc.stdout if isinstance(exc.stdout, str) else (
+            exc.stdout.decode("utf-8", errors="replace") if exc.stdout else ""
+        )
+        out = partial or ""
+        err_tail = f"timeout after {timeout_s}s"
+    except FileNotFoundError as exc:
+        exit_code = 127
+        err_tail = f"executable not found: {exc}"
     except Exception as exc:  # noqa: BLE001
         exit_code = 99
-        out = ""
         err_tail = repr(exc)[-300:]
     duration = time.time() - started
 
@@ -129,6 +167,7 @@ def run_phase(
     quality: str,
     dry_run: bool,
     extra_args: list[str] | None = None,
+    timeout_s: float | None = None,
 ) -> PhaseReport:
     if phase not in _PHASES:
         raise ValueError(f"unknown phase {phase!r}; expected one of {_PHASES}")
@@ -140,7 +179,10 @@ def run_phase(
         started_at=time.time(),
     )
     for task in tasks:
-        report.outcomes.append(_run_one(task, base_args=base, quality=quality, dry_run=dry_run))
+        report.outcomes.append(_run_one(
+            task, base_args=base, quality=quality,
+            dry_run=dry_run, timeout_s=timeout_s,
+        ))
     report.finished_at = time.time()
     return report
 
@@ -164,6 +206,13 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument(
         "--extra-arg", action="append", default=[],
         help="extra arg forwarded to mvp2 (repeatable, e.g. --extra-arg=--max-retries=2)",
+    )
+    p.add_argument(
+        "--per-task-timeout",
+        type=float,
+        default=None,
+        help="Kill each mvp2 invocation after N seconds (default: no limit). "
+        "On timeout the task records exit_code=124 and the phase keeps going.",
     )
     args = p.parse_args(argv)
 
@@ -192,6 +241,7 @@ def main(argv: list[str] | None = None) -> int:
         quality=args.quality,
         dry_run=args.dry_run,
         extra_args=extra,
+        timeout_s=args.per_task_timeout,
     )
     _dump_report(report, args.report_out)
     failed = sum(1 for o in report.outcomes if o.exit_code != 0)

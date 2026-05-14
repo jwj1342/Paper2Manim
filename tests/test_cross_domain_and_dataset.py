@@ -363,7 +363,7 @@ def test_cross_domain_read_tasks_filters_by_domain_and_split(tmp_path):
 def test_cross_domain_run_phase_dumps_report(tmp_path, monkeypatch):
     from scripts import cross_domain as cd
 
-    def fake_run_one(task, *, base_args, quality, dry_run):
+    def fake_run_one(task, *, base_args, quality, dry_run, **_):
         return cd.TaskOutcome(
             arxiv_id=task["arxiv_id"],
             section=task["section"],
@@ -405,7 +405,7 @@ def test_cross_domain_extra_args_forwarded(tmp_path, monkeypatch):
 
     captured: dict = {}
 
-    def fake_run_one(task, *, base_args, quality, dry_run):
+    def fake_run_one(task, *, base_args, quality, dry_run, **_):
         captured["base_args"] = base_args
         return cd.TaskOutcome(
             arxiv_id=task["arxiv_id"], section=task["section"], domain=task["domain"],
@@ -423,3 +423,241 @@ def test_cross_domain_extra_args_forwarded(tmp_path, monkeypatch):
     )
     assert "--max-retries" in captured["base_args"]
     assert "1" in captured["base_args"]
+
+
+# ---------- _run_one: subprocess form ----------
+
+
+class TestRunOneSubprocess:
+    """``_run_one`` shells out via ``python -m paper2manim`` for the same
+    reasons run_experiment._invoke_one does: crash isolation, timeout,
+    no module-state leak, memory reclaim."""
+
+    def _completed(self, *, returncode=0, stdout="", stderr=""):
+        import subprocess
+        return subprocess.CompletedProcess(
+            args=[], returncode=returncode, stdout=stdout, stderr=stderr,
+        )
+
+    def _task(self):
+        return {"arxiv_id": "1706.03762", "section": "Background", "domain": "cs"}
+
+    def test_invokes_python_dash_m_paper2manim(self):
+        from scripts import cross_domain as cd
+
+        captured: dict = {}
+
+        def fake_runner(cmd, **kwargs):
+            captured["cmd"] = cmd
+            captured["kwargs"] = kwargs
+            return self._completed(stdout="RUN_ID=cd-fake-1\n")
+
+        outcome = cd._run_one(
+            self._task(), base_args=["--vlm", "--no-emb"],
+            quality="l", dry_run=False, runner=fake_runner,
+        )
+        assert outcome.exit_code == 0
+        assert outcome.run_id == "cd-fake-1"
+        assert captured["cmd"][1:3] == ["-m", "paper2manim"]
+        assert captured["cmd"][3] == "mvp2"
+        assert "--dataset-domain" in captured["cmd"]
+        assert "cs" in captured["cmd"]
+        assert captured["kwargs"]["capture_output"] is True
+        assert captured["kwargs"]["text"] is True
+
+    def test_timeout_returns_124_with_partial_stdout(self):
+        import subprocess
+
+        from scripts import cross_domain as cd
+
+        def fake_runner(cmd, **kwargs):
+            raise subprocess.TimeoutExpired(
+                cmd=cmd, timeout=2.0, output="RUN_ID=cd-t\nstart...",
+            )
+
+        outcome = cd._run_one(
+            self._task(), base_args=[], quality="l", dry_run=False,
+            timeout_s=2.0, runner=fake_runner,
+        )
+        assert outcome.exit_code == 124
+        assert outcome.run_id == "cd-t"
+        assert "timeout after 2.0s" in outcome.stderr_tail
+
+    def test_executable_not_found_returns_127(self):
+        from scripts import cross_domain as cd
+
+        def fake_runner(cmd, **kwargs):
+            raise FileNotFoundError(2, "no such file", cmd[0])
+
+        outcome = cd._run_one(
+            self._task(), base_args=[], quality="l", dry_run=False,
+            runner=fake_runner,
+        )
+        assert outcome.exit_code == 127
+        assert "executable not found" in outcome.stderr_tail
+
+    def test_unexpected_runner_exception_returns_99(self):
+        from scripts import cross_domain as cd
+
+        def fake_runner(cmd, **kwargs):
+            raise RuntimeError("disk full")
+
+        outcome = cd._run_one(
+            self._task(), base_args=[], quality="l", dry_run=False,
+            runner=fake_runner,
+        )
+        assert outcome.exit_code == 99
+        assert "RuntimeError" in outcome.stderr_tail
+
+    def test_dry_run_appends_no_render_to_args(self):
+        from scripts import cross_domain as cd
+
+        captured: dict = {}
+
+        def fake_runner(cmd, **kwargs):
+            captured["cmd"] = cmd
+            return self._completed(stdout="")
+
+        cd._run_one(
+            self._task(), base_args=[], quality="l", dry_run=True,
+            runner=fake_runner,
+        )
+        assert "--no-render" in captured["cmd"]
+
+    def test_run_phase_threads_timeout_to_run_one(self, tmp_path, monkeypatch):
+        from scripts import cross_domain as cd
+
+        captured: dict = {}
+
+        def fake_run_one(task, *, base_args, quality, dry_run,
+                         timeout_s=None, **_):
+            captured["timeout_s"] = timeout_s
+            return cd.TaskOutcome(
+                arxiv_id=task["arxiv_id"], section=task["section"],
+                domain=task["domain"], exit_code=0, duration_s=0.0,
+            )
+
+        monkeypatch.setattr(cd, "_run_one", fake_run_one)
+        cd.run_phase(
+            phase="train", tasks=[self._task()],
+            emb_store_path=tmp_path / "emb",
+            quality="l", dry_run=False, timeout_s=900.0,
+        )
+        assert captured["timeout_s"] == 900.0
+
+
+# ---------- Real subprocess smoke ----------
+
+
+class TestCrossDomainRealSubprocessSmoke:
+    """Real ``python -m paper2manim`` exercise (PR #25 reviewer ask).
+
+    Same shape as TestRealSubprocessSmoke in test_run_experiment.py — proves
+    the subprocess wiring isn't silently dead. We can't run mvp2 here without
+    LLM/network, so we route through a guaranteed-fast dummy command and
+    verify the subprocess machinery captures the exit code + stderr."""
+
+    def test_unknown_command_nonzero_with_stderr_captured(self):
+        from scripts import cross_domain as cd
+
+        # Reuse _run_one for the exercise; dataset-domain is required by
+        # _run_one's argv builder so we need a valid task even if the inner
+        # CLI is going to bail. Override base_args with a non-existent
+        # subcommand-like flag so click exits non-zero quickly.
+        outcome = cd._run_one(
+            {"arxiv_id": "1706.03762", "section": "Background", "domain": "cs"},
+            base_args=["--this-flag-does-not-exist"],
+            quality="l", dry_run=False, timeout_s=30.0,
+        )
+        assert outcome.exit_code != 0
+        assert outcome.stderr_tail  # captured something
+
+
+# ---------- Shared dataset constants ----------
+
+
+class TestSharedDatasetConstants:
+    """CLI ``--dataset-domain`` and the validator must agree on the allowed
+    set; otherwise the CLI silently writes a misspelled tag the validator
+    later rejects, and ``retrieve_for_scene(domain_filter=...)`` permanently
+    misses those records."""
+
+    def test_cli_choice_uses_shared_domain_constants(self):
+        # The validator and the CLI must read from the same source.
+        from paper2manim.datasets import DOMAINS as cli_domains
+        from scripts.dataset_validate import _DOMAINS as validator_domains
+
+        assert set(cli_domains) == validator_domains, (
+            "CLI's --dataset-domain Choice and dataset_validate's _DOMAINS "
+            "must come from paper2manim.datasets.constants"
+        )
+
+    def test_cli_rejects_misspelled_domain(self, tmp_path):
+        from click.testing import CliRunner
+
+        from paper2manim.cli import cli
+
+        runner = CliRunner()
+        result = runner.invoke(cli, [
+            "mvp2",
+            "--arxiv", "1706.03762",
+            "--dataset-domain", "phyics",  # typo: "physics"
+            "--no-render",
+        ])
+        # click.Choice yields exit 2 for usage errors.
+        assert result.exit_code != 0
+        # Click's standard "Invalid value for '--dataset-domain'" message.
+        out = (result.output or "") + (
+            (result.stderr if hasattr(result, "stderr") else "") or ""
+        )
+        assert "phyics" in out
+
+    def test_cli_accepts_valid_domain(self, tmp_path, monkeypatch):
+        """Sanity: a valid domain still parses without click rejecting it.
+        We stub out build_mvp2_graph so we don't invoke the real graph."""
+        from click.testing import CliRunner
+
+        # Patch the graph runner so the command exits early with a known
+        # signal instead of doing real work.
+        sentinel = {"called": False}
+
+        class _DummyGraph:
+            def with_config(self, *a, **kw):
+                return self
+
+            def invoke(self, state, **kw):
+                sentinel["called"] = True
+                # Return a minimal final state so the CLI's post-graph code
+                # doesn't blow up.
+                return {
+                    **state,
+                    "fatal_error": "stub: real graph bypassed for test",
+                    "rendered_videos": [],
+                    "skipped_scenes": [],
+                }
+
+        monkeypatch.setattr(
+            "paper2manim.graphs.mvp2.build_mvp2_graph",
+            lambda: _DummyGraph(),
+        )
+        runner = CliRunner()
+        result = runner.invoke(cli_for_mvp2_test(), [
+            "mvp2",
+            "--arxiv", "1706.03762",
+            "--dataset-domain", "physics",  # valid
+            "--no-render",
+        ])
+        # Either the dummy graph ran (sentinel True) or click rejected the
+        # invocation BEFORE reaching the graph for some unrelated reason —
+        # but in no case should click reject the *domain* itself.
+        out = (result.output or "")
+        assert "Invalid value for '--dataset-domain'" not in out
+
+
+def cli_for_mvp2_test():
+    """Re-import the CLI to pick up the monkeypatched build_mvp2_graph."""
+    import importlib
+
+    import paper2manim.cli as cli_mod
+    importlib.reload(cli_mod)
+    return cli_mod.cli

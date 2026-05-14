@@ -14,6 +14,7 @@ from rich.table import Table
 
 from paper2manim.artifacts import new_run_id, run_dir, save_input
 from paper2manim.config.env import settings
+from paper2manim.datasets import DOMAINS as _DATASET_DOMAINS
 from paper2manim.logging_setup import setup_logging
 from paper2manim.parsers.text import load_text
 from paper2manim.state import PaperState
@@ -200,10 +201,12 @@ def mvp1(input_arg: str, quality: str | None, no_render: bool, allow_render_on_l
 @click.option(
     "--dataset-domain",
     "dataset_domain",
+    type=click.Choice(list(_DATASET_DOMAINS)),
     default=None,
-    help="Split-level domain tag (cs / math / physics / quantum / econ) "
-    "stamped on every record this run writes. Drives retrieval's optional "
-    "domain_filter for RQ3.",
+    help="Split-level domain tag stamped on every record this run writes. "
+    "Drives retrieval's optional domain_filter for RQ3. Validated against "
+    "paper2manim.datasets.DOMAINS so a typo fails fast instead of silently "
+    "writing a misspelled tag the validator would later reject.",
 )
 @click.option(
     "--emb-no-success-channel",

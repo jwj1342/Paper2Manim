@@ -25,8 +25,13 @@ import csv
 import sys
 from pathlib import Path
 
-_DOMAINS = {"cs", "math", "physics", "quantum", "econ"}
-_SPLITS = {"bootstrap", "eval", "cross_train", "cross_test"}
+# Single source of truth — also imported by ``paper2manim/cli.py`` as the
+# ``--dataset-domain`` ``click.Choice`` enumeration. Keep these in lockstep.
+from paper2manim.datasets import DOMAINS as _DOMAINS_TUPLE
+from paper2manim.datasets import SPLITS as _SPLITS_TUPLE
+
+_DOMAINS = set(_DOMAINS_TUPLE)
+_SPLITS = set(_SPLITS_TUPLE)
 _REQUIRED_COLS = ("arxiv_id", "section", "domain", "split")
 
 
