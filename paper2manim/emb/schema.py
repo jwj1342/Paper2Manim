@@ -41,6 +41,12 @@ class Context(BaseModel):
         description="Coarse scene category: background / method / experiment / conclusion / unknown",
     )
     domain_tags: list[str] = Field(default_factory=list)
+    # Single split-level domain identifier (cs / math / physics / quantum / econ).
+    # Distinct from ``domain_tags`` (multi-value, fine-grained) — ``domain`` is the
+    # experiment-level partition used by RQ3 cross-domain freeze. Empty string =
+    # "unknown / not tagged"; pre-B6 records load with this default via the
+    # ALTER TABLE migration in ``store.py``.
+    domain: str = Field(default="", description="e.g. 'cs' | 'math' | 'physics' | 'quantum' | 'econ'")
     source_paper: str = Field(default="", description="e.g. 'arxiv:1706.03762'")
     source_section: str = Field(default="", description="e.g. 'Background'")
 

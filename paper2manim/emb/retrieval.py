@@ -72,14 +72,36 @@ def retrieve_for_scene(
     k_success: int = 2,
     k_failure: int = 3,
     bump_hit: bool = True,
+    domain_filter: str | None = None,
+    skip_success: bool = False,
+    skip_failure: bool = False,
 ) -> RetrievalBundle:
-    """Top-k for each polarity. Empty EMB → empty bundle, no exception."""
+    """Top-k for each polarity. Empty EMB → empty bundle, no exception.
+
+    ``domain_filter`` (RQ3 / §8.3 Ablation E) restricts hits to records whose
+    ``context.domain`` matches. ``None`` (default) is the proposal-spec
+    behavior — RQ3 cross-domain experiments WANT Domain B to retrieve Domain
+    A's records, so leave the filter off unless explicitly isolating.
+
+    ``skip_success`` / ``skip_failure`` short-circuit the polarity being
+    ablated. Used by ``--emb-no-success-channel`` / ``--emb-no-failure-channel``
+    so the channel disappears from retrieval (in addition to writes), and
+    stale records can't contaminate the ablation.
+    """
     try:
-        s_hits = emb.query(scene_text, polarity="success", k=k_success, bump_hit=bump_hit)
-        f_hits = emb.query(scene_text, polarity="failure", k=k_failure, bump_hit=bump_hit)
+        s_hits = [] if skip_success else emb.query(
+            scene_text, polarity="success", k=k_success, bump_hit=bump_hit
+        )
+        f_hits = [] if skip_failure else emb.query(
+            scene_text, polarity="failure", k=k_failure, bump_hit=bump_hit
+        )
     except Exception as exc:  # noqa: BLE001 — never let RAG crash the graph
         log.warning("[emb.retrieve] query failed (%s) — degrading to zero-shot", exc)
         return RetrievalBundle()
+
+    if domain_filter:
+        s_hits = [r for r in s_hits if r.record.context.domain == domain_filter]
+        f_hits = [r for r in f_hits if r.record.context.domain == domain_filter]
     return RetrievalBundle(success=s_hits, failure=f_hits)
 
 

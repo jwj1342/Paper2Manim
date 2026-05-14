@@ -90,6 +90,10 @@ class SceneState(TypedDict, total=False):
     emb_use_faiss: bool
     emb_use_real_embedder: bool
     emb_instance: object | None
+    # B6 channel ablation flags forwarded from PaperState; default False in
+    # ``_make_scene_payload`` so old call sites don't have to opt in.
+    emb_no_success_channel: bool
+    emb_no_failure_channel: bool
 
     # ---- Per-scene mutables (managed by inner loop) ----
     current_code: str | None
@@ -161,7 +165,13 @@ def emb_retrieve_node(state: SceneState) -> dict[str, Any]:
     scene_text = (scene.get("description") or scene.get("name") or "").strip()
     if not scene_text:
         return empty
-    bundle = retrieve_for_scene(emb, scene_text, k_success=2, k_failure=3)
+    bundle = retrieve_for_scene(
+        emb, scene_text, k_success=2, k_failure=3,
+        skip_success=bool(state.get("emb_no_success_channel", False)),
+        skip_failure=bool(state.get("emb_no_failure_channel", False)),
+        # Cross-domain freeze (RQ3) leaves domain_filter=None so Domain B
+        # retrieves Domain A's records. Pass it explicitly when ablating.
+    )
     wire = bundle.to_state_dict()
     try:
         append_trace(
