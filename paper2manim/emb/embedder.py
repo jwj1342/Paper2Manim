@@ -10,7 +10,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import math
-from typing import Protocol, runtime_checkable
+from typing import Any, Protocol, runtime_checkable
 
 from paper2manim.emb.exceptions import EmbedderError
 
@@ -27,6 +27,15 @@ class Embedder(Protocol):
     def encode(self, texts: list[str]) -> list[list[float]]: ...
 
     def encode_one(self, text: str) -> list[float]: ...
+
+    def spec(self) -> dict[str, Any]:
+        """Serializable identity (``kind``, ``model``, ``dim``).
+
+        Persisted alongside the EMB store so different consumers (batch /
+        ``emb`` CLI / next-batch re-open) can't bleed e.g. a 64-d HashEmbedder
+        over a 384-d ST store's records.
+        """
+        ...
 
 
 # ---- Default: sentence-transformers ----
@@ -109,6 +118,13 @@ class SentenceTransformersEmbedder:
     def encode_one(self, text: str) -> list[float]:
         return self.encode([text])[0]
 
+    def spec(self) -> dict[str, Any]:
+        # Avoid forcing model load just to report the spec — fall back to the
+        # documented default dim so ``emb stats`` can stay cheap on a fresh
+        # process that hasn't called encode() yet.
+        dim = self._dim if self._dim is not None else _DEFAULT_DIM
+        return {"kind": "sentence-transformers", "model": self._model_name, "dim": int(dim)}
+
 
 # ---- Test-friendly default: deterministic hash embedder ----
 
@@ -149,3 +165,6 @@ class HashEmbedder:
 
     def encode(self, texts: list[str]) -> list[list[float]]:
         return [self.encode_one(t) for t in texts]
+
+    def spec(self) -> dict[str, Any]:
+        return {"kind": "hash", "dim": int(self._dim)}

@@ -29,20 +29,11 @@ from pathlib import Path
 # ``--dataset-domain`` ``click.Choice`` enumeration. Keep these in lockstep.
 from paper2manim.datasets import DOMAINS as _DOMAINS_TUPLE
 from paper2manim.datasets import SPLITS as _SPLITS_TUPLE
+from paper2manim.datasets import strip_comment_lines as _strip_comment_lines
 
 _DOMAINS = set(_DOMAINS_TUPLE)
 _SPLITS = set(_SPLITS_TUPLE)
 _REQUIRED_COLS = ("arxiv_id", "section", "domain", "split")
-
-
-def _strip_comment_lines(path: Path) -> list[str]:
-    out: list[str] = []
-    for raw in path.read_text(encoding="utf-8").splitlines():
-        s = raw.strip()
-        if not s or s.startswith("#"):
-            continue
-        out.append(raw)
-    return out
 
 
 def _check_row(row: dict, idx: int) -> str | None:

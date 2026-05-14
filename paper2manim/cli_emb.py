@@ -62,9 +62,11 @@ def _resolve_store(store_path: str | None) -> Path:
 def _open_emb(store_path: str | None) -> EpisodicMemoryBank:
     """Open the EMB at ``store_path`` for inspection.
 
-    Always uses the lightweight ``HashEmbedder`` to avoid pulling in
-    sentence-transformers + torch on every CLI invocation — this CLI doesn't
-    need to compute embeddings, only read existing ones.
+    Defers embedder choice to the store's pinned ``embedder.json`` spec
+    (issue #27 Bug B) — forcing ``HashEmbedder(64)`` here used to blow away
+    rehydration on stores that were written with sentence-transformers.
+    The ST embedder is lazy-loaded on first ``encode()``, so read-only ops
+    like ``stats`` / ``list`` / ``show`` still don't pay the torch import.
     """
     p = _resolve_store(store_path)
     if not p.exists():
@@ -72,7 +74,7 @@ def _open_emb(store_path: str | None) -> EpisodicMemoryBank:
             f"EMB store not found at {p}. Run something with --emb first, "
             f"or pass --store-path explicitly."
         )
-    return build_default_emb(str(p), use_real_embedder=False)
+    return build_default_emb(str(p))
 
 
 # --------------------------------------------------------------------------- #

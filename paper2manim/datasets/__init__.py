@@ -10,5 +10,6 @@ write a misspelled tag into EMB records and make ``retrieve_for_scene
 from __future__ import annotations
 
 from .constants import DOMAINS, SPLITS
+from .csv_utils import strip_comment_lines
 
-__all__ = ["DOMAINS", "SPLITS"]
+__all__ = ["DOMAINS", "SPLITS", "strip_comment_lines"]
