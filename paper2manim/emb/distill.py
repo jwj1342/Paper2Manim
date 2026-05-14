@@ -559,6 +559,7 @@ def distill_success_records(
     source_paper: str = "",
     source_section: str = "",
     rationale_writer: RationaleWriter | None = None,
+    domain: str = "",
 ) -> list[MemoryRecord]:
     """One ``MemoryRecord`` per scene whose final avg score ≥ ``theta_high``.
 
@@ -567,6 +568,9 @@ def distill_success_records(
     bypass-passes also qualify as success records. If ``theta_high <= 0``,
     scenes without VLM scoring still qualify (useful for MVP 2.0-style
     bootstrap where the VLM loop is disabled).
+
+    ``domain`` (B6) is stamped on every Context for RQ3 cross-domain
+    experiments. Empty string = "untagged".
     """
     rw = rationale_writer or default_rationale_writer
     desc = _scene_description_lookup(state)
@@ -585,6 +589,7 @@ def distill_success_records(
             task_text=scene_desc or sc.name,
             scene_role=_scene_role_from_name(sc.name),
             domain_tags=_domain_tags_from_text(scene_desc or sc.name),
+            domain=domain,
             source_paper=source_paper,
             source_section=source_section,
         )
@@ -609,11 +614,15 @@ def distill_failure_records(
     include_text_transitions: bool = True,
     include_visual_transitions: bool = True,
     failure_min_margin: float = 5.0,
+    domain: str = "",
 ) -> list[MemoryRecord]:
     """One record per validated transition. ``after_score − before_score ≥
     failure_min_margin`` enforced inside :func:`find_visual_transitions`; text
     transitions are validated by ``error → success``. Default 5.0 is on the
-    proposal §4.2 0–100 scale."""
+    proposal §4.2 0–100 scale.
+
+    ``domain`` (B6) stamps every Context for RQ3 cross-domain experiments.
+    """
     ld = lesson_distiller or default_lesson_distiller
     desc = _scene_description_lookup(state)
     scenes = parse_trace(run_id)
@@ -636,6 +645,7 @@ def distill_failure_records(
             task_text=scene_desc or vt.scene,
             scene_role=_scene_role_from_name(vt.scene),
             domain_tags=_domain_tags_from_text(scene_desc or vt.scene),
+            domain=domain,
             source_paper=source_paper,
             source_section=source_section,
         )
@@ -659,6 +669,7 @@ def distill_failure_records(
             task_text=scene_desc or tt.scene,
             scene_role=_scene_role_from_name(tt.scene),
             domain_tags=_domain_tags_from_text(scene_desc or tt.scene),
+            domain=domain,
             source_paper=source_paper,
             source_section=source_section,
         )
@@ -712,6 +723,9 @@ def consolidate_run(
     rationale_writer: RationaleWriter | None = None,
     lesson_distiller: LessonDistiller | None = None,
     failure_min_margin: float = 5.0,
+    domain: str = "",
+    skip_success: bool = False,
+    skip_failure: bool = False,
 ) -> ConsolidationReport:
     """End-to-end §4.4 sink for one paper-section run.
 
@@ -719,24 +733,35 @@ def consolidate_run(
     may hit an LLM/VLM) to materialize bodies; writes every produced record to
     ``emb``. Idempotent over repeated calls within a process **only insofar as
     new records are appended with fresh UUIDs** — there is no dedupe yet.
+
+    ``domain`` (B6) stamps every Context for RQ3 cross-domain. ``skip_success``
+    / ``skip_failure`` (B6, §8.3 Ablation E) bypass the corresponding distill
+    call entirely so the channel ablation works on the WRITE side too —
+    paired with the same flags in :func:`retrieve_for_scene` for the READ side.
     """
     report = ConsolidationReport()
-    succ = distill_success_records(
-        run_id,
-        state=state,
-        theta_high=theta_high,
-        source_paper=source_paper,
-        source_section=source_section,
-        rationale_writer=rationale_writer,
-    )
-    fail = distill_failure_records(
-        run_id,
-        state=state,
-        source_paper=source_paper,
-        source_section=source_section,
-        lesson_distiller=lesson_distiller,
-        failure_min_margin=failure_min_margin,
-    )
+    succ: list[MemoryRecord] = []
+    fail: list[MemoryRecord] = []
+    if not skip_success:
+        succ = distill_success_records(
+            run_id,
+            state=state,
+            theta_high=theta_high,
+            source_paper=source_paper,
+            source_section=source_section,
+            rationale_writer=rationale_writer,
+            domain=domain,
+        )
+    if not skip_failure:
+        fail = distill_failure_records(
+            run_id,
+            state=state,
+            source_paper=source_paper,
+            source_section=source_section,
+            lesson_distiller=lesson_distiller,
+            failure_min_margin=failure_min_margin,
+            domain=domain,
+        )
     for rec in succ:
         try:
             rid = emb.put(rec)

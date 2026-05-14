@@ -1,0 +1,14 @@
+# Paper2Manim task pool v1 (placeholder — curate before running real experiments)
+# Schema: examples/datasets/p2m_v1_schema.md
+# Columns: arxiv_id,section,domain,split,expected_scene_count_min
+arxiv_id,section,domain,split,expected_scene_count_min
+1706.03762,Background,cs,bootstrap,2
+1706.03762,Method,cs,bootstrap,3
+1810.04805,Introduction,cs,cross_train,2
+2010.11929,Introduction,cs,cross_train,2
+1412.6980,Algorithm,math,bootstrap,2
+1502.03167,Algorithm,math,eval,2
+0710.1538,Introduction,math,cross_train,2
+1503.02531,Introduction,physics,bootstrap,2
+1207.7235,Introduction,physics,cross_test,2
+quant-ph/0508027,Introduction,quantum,cross_test,2

@@ -66,6 +66,10 @@ CREATE TABLE IF NOT EXISTS memory_records (
     scene_id           TEXT NOT NULL DEFAULT '',
     extraction_source  TEXT NOT NULL DEFAULT '',
     transition_ordinal INTEGER NOT NULL DEFAULT 0,
+    -- Split-level dataset domain (cs / math / physics / quantum / econ).
+    -- Pulled out of context_json into its own column so ``WHERE domain = ?``
+    -- queries don't have to parse every record. Default '' = "unknown".
+    domain             TEXT NOT NULL DEFAULT '',
     context_json       TEXT NOT NULL,
     body_json          TEXT NOT NULL,
     provenance_json    TEXT NOT NULL,
@@ -75,6 +79,8 @@ CREATE TABLE IF NOT EXISTS memory_records (
 
 CREATE INDEX IF NOT EXISTS idx_polarity ON memory_records(polarity);
 CREATE INDEX IF NOT EXISTS idx_created  ON memory_records(created_at);
+-- idx_domain is created by _MIGRATIONS_SQL so legacy DBs without the
+-- ``domain`` column don't fail this CREATE INDEX before the ALTER TABLE runs.
 -- Partial unique index: rows with empty provenance (legacy / test scaffolding)
 -- are exempt; rows with real (run_id, scene_id) get deduped per
 -- (polarity, extraction_source, transition_ordinal). ``transition_ordinal``
@@ -94,6 +100,10 @@ _MIGRATIONS_SQL = [
     "ALTER TABLE memory_records ADD COLUMN scene_id TEXT NOT NULL DEFAULT ''",
     "ALTER TABLE memory_records ADD COLUMN extraction_source TEXT NOT NULL DEFAULT ''",
     "ALTER TABLE memory_records ADD COLUMN transition_ordinal INTEGER NOT NULL DEFAULT 0",
+    # B6: domain column for RQ3 cross-domain freeze. Default '' keeps pre-B6
+    # records readable; new writes populate from Context.domain.
+    "ALTER TABLE memory_records ADD COLUMN domain TEXT NOT NULL DEFAULT ''",
+    "CREATE INDEX IF NOT EXISTS idx_domain ON memory_records(domain)",
     # Replace the old 4-tuple uq_provenance with the new 5-tuple version on
     # legacy databases. Safe to run on fresh DBs too (drops then re-creates
     # the identical index). Existing 4-tuple-deduped data extends cleanly
@@ -195,9 +205,9 @@ class SQLiteMemoryStore:
                 self._conn.execute(
                     "INSERT OR REPLACE INTO memory_records "
                     "(id, polarity, run_id, scene_id, extraction_source, "
-                    " transition_ordinal, context_json, body_json, "
+                    " transition_ordinal, domain, context_json, body_json, "
                     " provenance_json, created_at, updated_at) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, "
                     "COALESCE((SELECT created_at FROM memory_records WHERE id=?), ?), ?)",
                     (
                         record.id,
@@ -206,6 +216,7 @@ class SQLiteMemoryStore:
                         prov.scene_id,
                         prov.extraction_source,
                         prov.transition_ordinal,
+                        record.context.domain,
                         record.context.model_dump_json(),
                         record.body.model_dump_json(),
                         prov.model_dump_json(),
