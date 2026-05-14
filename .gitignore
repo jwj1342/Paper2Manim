@@ -43,3 +43,7 @@ Thumbs.db
 
 # Plan / agent scratch
 .claude/
+
+# B6 dataset validator outputs (derived from curated CSVs)
+examples/datasets/*.validated.csv
+examples/datasets/*.errors.txt

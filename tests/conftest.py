@@ -45,6 +45,7 @@ def _isolated_runs_dir(tmp_path, monkeypatch):
     for mod_path in (
         "paper2manim.artifacts",
         "paper2manim.cli",
+        "paper2manim.cli_emb",
     ):
         import importlib
         try:
