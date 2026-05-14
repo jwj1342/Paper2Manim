@@ -497,8 +497,12 @@ def _emb_paths_from_manifest(manifest: dict[str, Any]) -> dict[str, Path]:
 
 
 def draw_emb_hits_plot(
-    emb_paths: dict[str, Path], out_png: Path
+    emb_paths: dict[str, Path], out_png: Path, *, seed: int | None = None
 ) -> None:
+    """``seed`` only affects the figure title — the EMB store path lookup
+    happens upstream in :func:`_emb_paths_from_manifest`. Passing the seed
+    lets the title match the actual store being plotted; defaults to ``?``
+    when callers don't have one (legacy ``--out`` path or ad-hoc invocation)."""
     try:
         import matplotlib
         matplotlib.use("Agg")
@@ -531,7 +535,8 @@ def draw_emb_hits_plot(
             ax.set_xlabel("hit_count")
             if col_idx == 0:
                 ax.set_ylabel("# records")
-    fig.suptitle("EMB hit-count distribution per config (seed 1)")
+    seed_label = "?" if seed is None else seed
+    fig.suptitle(f"EMB hit-count distribution per config (seed {seed_label})")
     fig.tight_layout()
     out_png.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(out_png, dpi=120)
@@ -584,7 +589,12 @@ def main(argv: list[str] | None = None) -> int:
             emb_png = png_path.with_name("emb_hits.png")
         write_csv_grouped(flat, curves, csv_path)
         draw_plot_grouped(curves, png_path)
-        draw_emb_hits_plot(_emb_paths_from_manifest(manifest), emb_png)
+        # Same seed _emb_paths_from_manifest used (manifest seeds[0]) so the
+        # title and the data on the panel agree.
+        seeds_for_emb = manifest.get("seeds") or [1]
+        draw_emb_hits_plot(
+            _emb_paths_from_manifest(manifest), emb_png, seed=seeds_for_emb[0]
+        )
         log.info(
             "wrote %s + %s (configs=%d, runs_aggregated=%d)",
             csv_path, png_path, len(curves), len(flat),

@@ -290,3 +290,101 @@ class TestLegacyMode:
         assert rc == 0
         csv_text = (out_dir / "hero_plot.csv").read_text(encoding="utf-8")
         assert "rid_pe_legacy" in csv_text
+
+
+# --------------------------------------------------------------------------- #
+# EMB hits panel — title must reflect the actual seed used to fetch records
+# --------------------------------------------------------------------------- #
+
+
+class TestEmbHitsTitle:
+    """``draw_emb_hits_plot`` should never hardcode ``(seed 1)``: the EMB
+    store actually plotted is ``seeds[0]`` from the manifest, so plotting a
+    run that used ``--seeds 3,7,11`` against a "(seed 1)" title would
+    silently mislead the report.
+    """
+
+    def _build_emb_at(self, path: Path):
+        from paper2manim.emb.manager import build_default_emb
+        from paper2manim.emb.schema import (
+            Context,
+            MemoryRecord,
+            Provenance,
+            SuccessBody,
+        )
+        emb = build_default_emb(str(path), use_real_embedder=False)
+        emb.put(MemoryRecord(
+            polarity="success",
+            context=Context(task_text="t", source_paper="arxiv:t"),
+            body=SuccessBody(rationale="r", code_full="# c"),
+            provenance=Provenance(
+                run_id="rid", scene_id="S1",
+                extraction_source="high_score_scene",
+                validated=True, vlm_score=92.0,
+                hit_count=4,
+            ),
+        ))
+        emb.save_indices()
+
+    def test_title_uses_passed_seed_not_hardcoded(self, pe, tmp_path, monkeypatch):
+        """Render a real (matplotlib-Agg) PNG with ``seed=7`` and confirm the
+        suptitle contains ``seed 7``."""
+        # Skip on hosts without matplotlib (mirrors the script's own fallback).
+        try:
+            import matplotlib  # noqa: F401
+        except ImportError:
+            pytest.skip("matplotlib not installed")
+
+        store = tmp_path / "emb_seed_7"
+        store.mkdir()
+        self._build_emb_at(store)
+
+        captured: dict = {}
+
+        # Wrap suptitle so we can read the rendered string without parsing PNG.
+        from matplotlib.figure import Figure
+        original = Figure.suptitle
+
+        def spy(self, t, *a, **kw):
+            captured["title"] = t
+            return original(self, t, *a, **kw)
+
+        monkeypatch.setattr(Figure, "suptitle", spy)
+
+        out_png = tmp_path / "emb_hits.png"
+        pe.draw_emb_hits_plot({"C": store}, out_png, seed=7)
+        assert out_png.exists()
+        assert captured.get("title") == (
+            "EMB hit-count distribution per config (seed 7)"
+        ), f"got title={captured.get('title')!r}"
+
+    def test_title_falls_back_to_question_mark_when_seed_omitted(
+        self, pe, tmp_path, monkeypatch
+    ):
+        try:
+            import matplotlib  # noqa: F401
+        except ImportError:
+            pytest.skip("matplotlib not installed")
+
+        store = tmp_path / "emb_no_seed"
+        store.mkdir()
+        self._build_emb_at(store)
+
+        captured: dict = {}
+        from matplotlib.figure import Figure
+        original = Figure.suptitle
+
+        def spy(self, t, *a, **kw):
+            captured["title"] = t
+            return original(self, t, *a, **kw)
+
+        monkeypatch.setattr(Figure, "suptitle", spy)
+        pe.draw_emb_hits_plot({"C": store}, tmp_path / "x.png")
+        assert "(seed ?)" in captured.get("title", "")
+
+    # NOTE: an E2E "main(--manifest …)" test would be ideal here, but on this
+    # branch `_emb_paths_from_manifest` imports `paper2manim.ablations`, which
+    # only ships with PR #23 (run_experiment.py). When #23 lands the wiring is
+    # exercised by `TestMainManifestMode` indirectly (it goes through main()
+    # with cli_args set). The two unit tests above already lock the contract
+    # that `seed=` reaches the title.
