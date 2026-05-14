@@ -93,7 +93,7 @@ class HitStats:
     maximum: int
 
     @classmethod
-    def of(cls, hits: list[int]) -> "HitStats":
+    def of(cls, hits: list[int]) -> HitStats:
         if not hits:
             return cls(n=0, n_zero=0, minimum=0, p25=0, median=0, p75=0, maximum=0)
         s = sorted(hits)

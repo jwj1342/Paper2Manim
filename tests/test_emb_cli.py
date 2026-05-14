@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import json
 import time
-from pathlib import Path
 
 import pytest
 from click.testing import CliRunner
@@ -31,7 +30,6 @@ from paper2manim.emb.schema import (
     Provenance,
     SuccessBody,
 )
-
 
 # --------------------------------------------------------------------------- #
 # Fixtures
@@ -198,7 +196,6 @@ class TestSelectColdRecords:
         )
         # Cold success 1 (60d), cold success 2 (45d), failure 1 (90d) — all
         # have hit=0 AND age > 30d. Warm success (1d) and failure 2 (hit=3) excluded.
-        ids = sorted(r.id for r in cold)
         assert len(cold) == 3, f"expected 3, got {[(r.id[:8], r.polarity) for r in cold]}"
 
     def test_polarity_filter(self, populated_store):
@@ -224,7 +221,6 @@ class TestSelectColdRecords:
         cold = select_cold_records(
             emb, populated_store, cold_hit_threshold=5, max_age_days=1,
         )
-        ids = {r.id[:8] for r in cold}
         # Failure 2 has age 5 days > 1 day cutoff and hit=3 ≤ 5 → included
         assert len(cold) == 4, f"got {[(r.id[:8], r.polarity, r.provenance.hit_count) for r in cold]}"
 
