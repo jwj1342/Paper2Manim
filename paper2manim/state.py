@@ -144,6 +144,18 @@ class PaperState(TypedDict, total=False):
     retrieved_success: list[dict]  # wire-format records (no embedding payload)
     retrieved_failure: list[dict]
     emb_writes: Annotated[list[dict], operator.add]  # consolidation reports, one per run/scene
+    # B6: cross-domain freeze + channel ablations.
+    # ``emb_readonly`` (--emb-readonly): emb_consolidate_node returns immediately,
+    # so the EMB grows in train phase only. Required by RQ3 cross-domain test.
+    # ``dataset_domain`` (--dataset-domain cs|math|...): tags every record this
+    # run writes, so retrieval can later filter by ``Context.domain``.
+    # ``emb_no_success_channel`` / ``emb_no_failure_channel``: §8.3 Ablation E
+    # — disable one polarity for both retrieval (scene_graph.emb_retrieve_node)
+    # and consolidation (mvp2.emb_consolidate_node).
+    emb_readonly: bool
+    dataset_domain: str | None
+    emb_no_success_channel: bool
+    emb_no_failure_channel: bool
 
     # ---- Control flags ----
     # `fatal_error` is for graph-level fatal errors only (parser/summarizer/storyboarder/

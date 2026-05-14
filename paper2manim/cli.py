@@ -14,6 +14,7 @@ from rich.table import Table
 
 from paper2manim.artifacts import new_run_id, run_dir, save_input
 from paper2manim.config.env import settings
+from paper2manim.datasets import DOMAINS as _DATASET_DOMAINS
 from paper2manim.logging_setup import setup_logging
 from paper2manim.parsers.text import load_text
 from paper2manim.state import PaperState
@@ -62,6 +63,13 @@ def _print_summary(state: PaperState) -> None:
 def cli(verbose: bool) -> None:
     """LLM multi-agent pipeline: paper -> Manim animation."""
     setup_logging(level=logging.DEBUG if verbose else logging.INFO)
+
+
+# Register subcommand groups. Imported here (not at top of file) so the
+# heavy emb stack doesn't load on every ``paper2manim mvp1`` invocation.
+from paper2manim.cli_emb import emb_group as _emb_group  # noqa: E402
+
+cli.add_command(_emb_group)
 
 
 @cli.command()
@@ -190,6 +198,38 @@ def mvp1(input_arg: str, quality: str | None, no_render: bool, allow_render_on_l
     help="Use the dependency-free HashEmbedder instead of sentence-transformers. Useful for CI / offline bootstrap.",
 )
 @click.option(
+    "--emb-readonly/--no-emb-readonly",
+    "emb_readonly",
+    default=False,
+    help="Read-only EMB: skip end-of-run consolidation. Required by RQ3 "
+    "cross-domain test phase so the frozen Domain-A EMB doesn't absorb "
+    "Domain-B records mid-experiment.",
+)
+@click.option(
+    "--dataset-domain",
+    "dataset_domain",
+    type=click.Choice(list(_DATASET_DOMAINS)),
+    default=None,
+    help="Split-level domain tag stamped on every record this run writes. "
+    "Drives retrieval's optional domain_filter for RQ3. Validated against "
+    "paper2manim.datasets.DOMAINS so a typo fails fast instead of silently "
+    "writing a misspelled tag the validator would later reject.",
+)
+@click.option(
+    "--emb-no-success-channel",
+    "emb_no_success_channel",
+    is_flag=True,
+    default=False,
+    help="§8.3 Ablation E — disable EMB.success on both retrieve and write.",
+)
+@click.option(
+    "--emb-no-failure-channel",
+    "emb_no_failure_channel",
+    is_flag=True,
+    default=False,
+    help="§8.3 Ablation E — disable EMB.failure on both retrieve and write.",
+)
+@click.option(
     "--scene-parallelism",
     default=1,
     type=int,
@@ -224,6 +264,10 @@ def mvp2(
     emb_failure_min_margin: float,
     emb_use_llm_distillers: bool,
     emb_use_real_embedder: bool,
+    emb_readonly: bool,
+    dataset_domain: str | None,
+    emb_no_success_channel: bool,
+    emb_no_failure_channel: bool,
     scene_parallelism: int,
     render_concurrency: int | None,
     llm_rps: float | None,
@@ -273,6 +317,11 @@ def mvp2(
         "retrieved_success": [],
         "retrieved_failure": [],
         "emb_writes": [],
+        # B6 cross-domain freeze + channel ablations
+        "emb_readonly": emb_readonly,
+        "dataset_domain": dataset_domain,
+        "emb_no_success_channel": emb_no_success_channel,
+        "emb_no_failure_channel": emb_no_failure_channel,
     }
     if emb_enabled:
         console.print(f"[cyan]EMB enabled[/cyan] — store={resolved_emb_path}, theta_high={emb_theta_high}")

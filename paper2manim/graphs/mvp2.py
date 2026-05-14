@@ -101,6 +101,11 @@ def _make_scene_payload(state: PaperState, idx: int) -> dict[str, Any]:
         "emb_use_faiss": bool(state.get("emb_use_faiss", True)),
         "emb_use_real_embedder": bool(state.get("emb_use_real_embedder", True)),
         "emb_instance": state.get("emb_instance"),
+        # B6 channel ablation: forwarded so per-scene emb_retrieve_node sees
+        # the same toggles. Write-side toggles stay on PaperState (used by
+        # parent emb_consolidate_node).
+        "emb_no_success_channel": bool(state.get("emb_no_success_channel", False)),
+        "emb_no_failure_channel": bool(state.get("emb_no_failure_channel", False)),
         # Per-scene mutables — start fresh for each fan-out branch
         "current_code": None,
         "iter_count": 0,
@@ -218,8 +223,23 @@ def concat_node(state: PaperState) -> dict[str, Any]:
 
 
 def emb_consolidate_node(state: PaperState) -> dict[str, Any]:
-    """End-of-run §4.4 sink: distill the trace into success/failure records."""
+    """End-of-run §4.4 sink: distill the trace into success/failure records.
+
+    ``emb_readonly`` (B6) short-circuits this node — required by RQ3
+    cross-domain test phase so the frozen Domain-A EMB doesn't absorb
+    Domain-B records mid-experiment. The retrieve path stays active so prior
+    records still inject into the Coder prompt; only WRITE is frozen.
+    """
     if not state.get("emb_enabled"):
+        return {}
+    if state.get("emb_readonly"):
+        try:
+            append_trace(
+                state.get("run_id", ""), "emb_consolidate",
+                {"skipped": True, "reason": "emb_readonly"},
+            )
+        except Exception:  # noqa: BLE001
+            pass
         return {}
     # The scene-level cache + the parent share the same `_EMB_CACHE` dict in
     # scene_graph; reuse its resolver so we don't double-build.
@@ -253,6 +273,9 @@ def emb_consolidate_node(state: PaperState) -> dict[str, Any]:
     # falls back to these.
     theta = float(state.get("emb_theta_high", 85.0))
     fail_margin = float(state.get("emb_failure_min_margin", 5.0))
+    domain = state.get("dataset_domain") or ""
+    skip_success = bool(state.get("emb_no_success_channel", False))
+    skip_failure = bool(state.get("emb_no_failure_channel", False))
     try:
         report = consolidate_run(
             run_id,
@@ -264,6 +287,9 @@ def emb_consolidate_node(state: PaperState) -> dict[str, Any]:
             rationale_writer=rw,
             lesson_distiller=ld,
             failure_min_margin=fail_margin,
+            domain=domain,
+            skip_success=skip_success,
+            skip_failure=skip_failure,
         )
     except Exception as exc:  # noqa: BLE001
         log.warning("[emb_consolidate] failed for run %s: %s", run_id, exc)

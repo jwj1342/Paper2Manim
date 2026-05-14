@@ -41,6 +41,12 @@ class Context(BaseModel):
         description="Coarse scene category: background / method / experiment / conclusion / unknown",
     )
     domain_tags: list[str] = Field(default_factory=list)
+    # Single split-level domain identifier (cs / math / physics / quantum / econ).
+    # Distinct from ``domain_tags`` (multi-value, fine-grained) — ``domain`` is the
+    # experiment-level partition used by RQ3 cross-domain freeze. Empty string =
+    # "unknown / not tagged"; pre-B6 records load with this default via the
+    # ALTER TABLE migration in ``store.py``.
+    domain: str = Field(default="", description="e.g. 'cs' | 'math' | 'physics' | 'quantum' | 'econ'")
     source_paper: str = Field(default="", description="e.g. 'arxiv:1706.03762'")
     source_section: str = Field(default="", description="e.g. 'Background'")
 
@@ -120,6 +126,12 @@ class Provenance(BaseModel):
     before_score: float | None = Field(default=None, description="Failure: low-score version")
     after_score: float | None = Field(default=None, description="Failure: high-score version")
     vlm_score: float | None = Field(default=None, description="Success: final VLM score")
+    # Visual revision idx that produced ``vlm_score``. ``retest`` needs this to
+    # locate the correct ``vlm_frames/<scene>_v<n>.png``: ``vlm_score`` is the
+    # score of the *accepted* version (often v1/v2 after a revision), so reading
+    # back the v0 montage and comparing to ``vlm_score`` would always look like
+    # decay. Default 0 (legacy / no-VLM records).
+    final_v_rev: int = Field(default=0, ge=0, description="Success: v_rev that produced vlm_score")
     hit_count: int = Field(default=0, ge=0)
     first_seen: float = Field(default_factory=time.time)
     last_used: float | None = Field(default=None)
