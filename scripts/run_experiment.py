@@ -51,6 +51,7 @@ from typing import Any
 
 from paper2manim.ablations import known_presets
 from paper2manim.ablations import resolve as resolve_preset
+from paper2manim.datasets import strip_comment_lines as _strip_comment_lines
 
 # Re-use bootstrap's RUN_ID parser so both drivers stay in lockstep.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -108,14 +109,13 @@ def load_tasks(args: argparse.Namespace) -> list[TaskSpec]:
         path = Path(args.tasks_csv)
         if not path.exists():
             raise SystemExit(f"tasks CSV not found: {path}")
-        with path.open("r", encoding="utf-8") as f:
-            for row in csv.DictReader(f):
-                # Skip comment-style rows (header line starting with #).
-                if not row or any(
-                    (k or "").lstrip().startswith("#") for k in row.keys() if k
-                ):
-                    continue
-                tasks.append(TaskSpec.from_csv_row(row))
+        # Pre-strip ``#`` comment lines so csv.DictReader doesn't pick a
+        # schema-note line as its header and skip every data row.
+        lines = _strip_comment_lines(path)
+        for row in csv.DictReader(lines):
+            if not row:
+                continue
+            tasks.append(TaskSpec.from_csv_row(row))
     for raw in args.tasks or []:
         tasks.append(TaskSpec.from_inline(raw))
     if not tasks:
@@ -214,6 +214,8 @@ def build_cli_args(
     out: list[str] = ["mvp2", "--arxiv", task.arxiv_id]
     if task.section:
         out.extend(["--section", task.section])
+    if task.domain:
+        out.extend(["--dataset-domain", task.domain])
     out.extend(["--quality", args.quality])
     if args.max_retries is not None:
         out.extend(["--max-retries", str(args.max_retries)])

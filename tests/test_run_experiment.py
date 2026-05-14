@@ -150,6 +150,24 @@ class TestBuildCliArgs:
         )
         assert "--no-render" in argv
 
+    def test_dataset_domain_passthrough(self, re_mod):
+        """Regression: issue #27 Bug A — TaskSpec.domain must reach the child
+        CLI as ``--dataset-domain``, otherwise EMB records land with empty
+        domain and cross-domain freeze (PR #25) silently no-ops."""
+        task = re_mod.TaskSpec(arxiv_id="1706.03762", domain="cs")
+        argv = re_mod.build_cli_args(
+            "A", 1, task, self._args(), emb_store_path=None
+        )
+        i = argv.index("--dataset-domain")
+        assert argv[i + 1] == "cs"
+
+    def test_dataset_domain_omitted_when_empty(self, re_mod):
+        task = re_mod.TaskSpec(arxiv_id="1706.03762", domain="")
+        argv = re_mod.build_cli_args(
+            "A", 1, task, self._args(), emb_store_path=None
+        )
+        assert "--dataset-domain" not in argv
+
     def test_emb_path_for_returns_none_for_no_emb_configs(self, re_mod):
         import argparse
         ns = argparse.Namespace(emb_store_base="runs/_emb_exp1")
@@ -255,6 +273,36 @@ class TestMainDryRun:
         manifest = json.loads((out_dir / "manifest.json").read_text())
         assert manifest["tasks"][0]["domain"] == "cs"
         assert manifest["runs"][0]["domain"] == "cs"
+
+    def test_csv_with_leading_comment_lines_parses(self, re_mod, tmp_path):
+        """Regression: issue #27 Bug C — comment lines like the schema-doc
+        preamble in ``examples/datasets/p2m_v1.csv`` used to swallow the real
+        header, leaving DictReader fieldnames = ['# ...'] and 0 tasks loaded.
+        """
+        csv_path = tmp_path / "tasks.csv"
+        csv_path.write_text(
+            "# Paper2Manim task pool v1 (placeholder)\n"
+            "# Schema: examples/datasets/p2m_v1_schema.md\n"
+            "# Columns: arxiv_id,section,domain,split,expected_scene_count_min\n"
+            "arxiv_id,section,domain,split,expected_scene_count_min\n"
+            "1706.03762,Background,cs,bootstrap,2\n"
+            "1810.04805,Introduction,cs,bootstrap,2\n",
+            encoding="utf-8",
+        )
+        out_dir = tmp_path / "exp_comments"
+        rc = re_mod.main([
+            "--tasks-csv", str(csv_path),
+            "--configs", "A",
+            "--seeds", "1",
+            "--out-dir", str(out_dir),
+            "--dry-run",
+        ])
+        assert rc == 0
+        manifest = json.loads((out_dir / "manifest.json").read_text())
+        assert len(manifest["tasks"]) == 2
+        assert manifest["tasks"][0]["arxiv_id"] == "1706.03762"
+        assert manifest["tasks"][0]["domain"] == "cs"
+        assert manifest["tasks"][1]["arxiv_id"] == "1810.04805"
 
 
 # --------------------------------------------------------------------------- #

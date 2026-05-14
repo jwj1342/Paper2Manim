@@ -11,9 +11,11 @@ components directly. The facade handles three things the components don't:
 
 from __future__ import annotations
 
+import json
 import logging
 from collections.abc import Iterable
 from pathlib import Path
+from typing import Any
 
 from paper2manim.emb.embedder import (
     Embedder,
@@ -145,6 +147,7 @@ class EpisodicMemoryBank:
         # Cheap on EMB load (≤ 1K records expected); fast path for prod is
         # incremental add() in :meth:`put`. Re-hydration is needed because the
         # SQLite db survives process restarts while in-memory indices don't.
+        failures: list[tuple[str, str]] = []
         for rec in self._store.all():
             if not rec.context.task_embedding:
                 continue
@@ -160,7 +163,18 @@ class EpisodicMemoryBank:
             try:
                 idx.add(rec.id, rec.context.task_embedding)
             except VectorIndexError as exc:
-                log.warning("[emb] skip rehydrate id=%s: %s", rec.id, exc)
+                failures.append((rec.id, str(exc)))
+        if failures:
+            # All-or-nothing: dim mismatch here means embedder spec disagrees
+            # with what was actually written. Previously this just logged
+            # warnings and silently dropped every record (issue #27 Bug B);
+            # the EMB then looked alive but retrieved nothing. Surface it so
+            # the operator can fix the spec / wipe + rebootstrap.
+            head = ", ".join(f"{rid[:8]}={msg}" for rid, msg in failures[:3])
+            raise VectorIndexError(
+                f"[emb] rehydrate failed for {len(failures)} record(s); "
+                f"check embedder spec matches stored vectors; first: {head}"
+            )
 
     # ---- API ----
 
@@ -298,6 +312,69 @@ class EpisodicMemoryBank:
 # ---- Convenience constructors ----
 
 
+EMBEDDER_SPEC_FILENAME = "embedder.json"
+_DEFAULT_ST_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
+_DEFAULT_ST_DIM = 384
+_DEFAULT_HASH_DIM = 64
+
+
+def _spec_path(store_dir: Path) -> Path:
+    return store_dir / EMBEDDER_SPEC_FILENAME
+
+
+def _read_spec(store_dir: Path) -> dict[str, Any] | None:
+    p = _spec_path(store_dir)
+    if not p.exists():
+        return None
+    try:
+        spec = json.loads(p.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise EMBError(f"embedder spec at {p} unreadable: {exc}") from exc
+    if not isinstance(spec, dict) or "kind" not in spec or "dim" not in spec:
+        raise EMBError(f"embedder spec at {p} malformed: {spec!r}")
+    return spec
+
+
+def _write_spec(store_dir: Path, spec: dict[str, Any]) -> None:
+    p = _spec_path(store_dir)
+    tmp = p.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(spec, indent=2, sort_keys=True), encoding="utf-8")
+    tmp.replace(p)
+
+
+def _build_embedder_from_spec(spec: dict[str, Any]) -> Embedder:
+    kind = spec.get("kind")
+    dim = int(spec["dim"])
+    if kind == "sentence-transformers":
+        return SentenceTransformersEmbedder(spec.get("model") or _DEFAULT_ST_MODEL)
+    if kind == "hash":
+        return HashEmbedder(dim=dim)
+    raise EMBError(f"unknown embedder kind in spec: {kind!r}")
+
+
+def _backfill_spec_from_records(store: MemoryStore) -> dict[str, Any] | None:
+    """Infer a spec from the first record carrying ``task_embedding``.
+
+    Best-effort, used to migrate legacy stores written before issue #27 Bug B
+    was fixed (when no spec file was persisted). Assumes a single homogeneous
+    embedder per store.
+    """
+    for rec in store.all():
+        vec = rec.context.task_embedding
+        if not vec:
+            continue
+        dim = len(vec)
+        if dim == _DEFAULT_ST_DIM:
+            return {"kind": "sentence-transformers", "model": _DEFAULT_ST_MODEL, "dim": dim}
+        if dim == _DEFAULT_HASH_DIM:
+            return {"kind": "hash", "dim": dim}
+        # Unknown dim: fall back to HashEmbedder of that dim so retrieval can
+        # still rehydrate without crashing. The operator may need to write an
+        # explicit embedder.json if they want sentence-transformers semantics.
+        return {"kind": "hash", "dim": dim}
+    return None
+
+
 def build_default_emb(
     base_dir: Path | str,
     *,
@@ -311,6 +388,7 @@ def build_default_emb(
 
         base_dir/
         ├── memory.db
+        ├── embedder.json  (pinned embedder identity — see issue #27 Bug B)
         ├── success.index  (Faiss native + .meta pickle sidecar)
         └── failure.index
 
@@ -318,27 +396,67 @@ def build_default_emb(
     avoids the ~80 MB sentence-transformers download. Useful for tests, CI
     smoke runs, and offline bootstrap experiments where retrieval quality
     isn't being measured yet.
+
+    The store *pins* its embedder identity on first creation: subsequent opens
+    use the pinned spec regardless of ``use_real_embedder`` / ``embedder_model``
+    so different consumers can't bleed an incompatible-dim embedder over an
+    existing store. If the spec disagrees with the caller's request, a
+    warning is logged and the pinned spec wins — pass a different
+    ``base_dir`` for a fresh embedder.
     """
     base = Path(base_dir)
     base.mkdir(parents=True, exist_ok=True)
     store = SQLiteMemoryStore(base / "memory.db")
-    if use_real_embedder:
-        embedder: Embedder = SentenceTransformersEmbedder(
-            embedder_model or "sentence-transformers/all-MiniLM-L6-v2"
-        )
+
+    # Resolve embedder spec: pinned > backfilled > caller's intent.
+    spec = _read_spec(base)
+    origin: str
+    if spec is not None:
+        origin = "pinned"
     else:
-        embedder = HashEmbedder(dim=64)
+        backfilled = _backfill_spec_from_records(store)
+        if backfilled is not None:
+            spec = backfilled
+            origin = "backfilled"
+        else:
+            if use_real_embedder:
+                spec = {
+                    "kind": "sentence-transformers",
+                    "model": embedder_model or _DEFAULT_ST_MODEL,
+                    "dim": _DEFAULT_ST_DIM,
+                }
+            else:
+                spec = {"kind": "hash", "dim": _DEFAULT_HASH_DIM}
+            origin = "caller"
+
+    caller_wanted_real = use_real_embedder
+    pinned_real = spec["kind"] == "sentence-transformers"
+    if origin == "pinned" and caller_wanted_real != pinned_real:
+        log.warning(
+            "[emb] store at %s is pinned to %s (dim=%d); caller asked for %s, "
+            "but the pinned spec wins. Use a different --emb-store-path to get "
+            "a fresh embedder.",
+            base, spec["kind"], spec["dim"],
+            "sentence-transformers" if caller_wanted_real else "hash",
+        )
+
+    embedder: Embedder = _build_embedder_from_spec(spec)
+    dim = int(spec["dim"])
+
+    # Build indices off the spec dim — never off ``embedder.dim`` — so opening
+    # an ST-pinned store for read-only inspection doesn't force a torch import.
     if use_faiss:
         try:
-            s_idx: VectorIndex = FaissVectorIndex(embedder.dim)
-            f_idx: VectorIndex = FaissVectorIndex(embedder.dim)
+            s_idx: VectorIndex = FaissVectorIndex(dim)
+            f_idx: VectorIndex = FaissVectorIndex(dim)
         except VectorIndexError as exc:
             log.warning("[emb] Faiss unavailable (%s); falling back to in-memory index", exc)
-            s_idx = InMemoryVectorIndex(embedder.dim)
-            f_idx = InMemoryVectorIndex(embedder.dim)
+            s_idx = InMemoryVectorIndex(dim)
+            f_idx = InMemoryVectorIndex(dim)
     else:
-        s_idx = InMemoryVectorIndex(embedder.dim)
-        f_idx = InMemoryVectorIndex(embedder.dim)
+        s_idx = InMemoryVectorIndex(dim)
+        f_idx = InMemoryVectorIndex(dim)
+
     # Load existing index files if present, otherwise rely on facade's
     # store-driven rebuild.
     s_path = base / "success.index"
@@ -353,6 +471,15 @@ def build_default_emb(
             f_idx.load(f_path)
         except VectorIndexError as exc:
             log.warning("[emb] failure index reload failed (%s); rebuilding from store", exc)
+
+    # Persist the spec for fresh / backfilled stores so the next open is cheap
+    # and we never re-infer.
+    if origin in ("caller", "backfilled"):
+        try:
+            _write_spec(base, spec)
+        except OSError as exc:
+            log.warning("[emb] failed to pin embedder spec at %s: %s", base, exc)
+
     return EpisodicMemoryBank(
         store=store,
         embedder=embedder,
