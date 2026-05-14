@@ -1,0 +1,29 @@
+---
+config:
+  flowchart:
+    curve: linear
+---
+graph TD;
+	__start__([<p>__start__</p>]):::first
+	emb_retrieve(emb_retrieve)
+	coder(coder)
+	render(render)
+	reviewer(reviewer)
+	frame_sampler(frame_sampler)
+	vlm_review(vlm_review)
+	visual_revise(visual_revise)
+	__end__([<p>__end__</p>]):::last
+	__start__ --> emb_retrieve;
+	emb_retrieve --> coder;
+	coder --> render;
+	render --> reviewer;
+	reviewer -. &nbsp;retry&nbsp; .-> coder;
+	reviewer -. &nbsp;frame_sampler&nbsp; .-> frame_sampler;
+	reviewer -. &nbsp;end (give_up / vlm off)&nbsp; .-> __end__;
+	frame_sampler --> vlm_review;
+	vlm_review -. &nbsp;visual_revise&nbsp; .-> visual_revise;
+	vlm_review -. &nbsp;end (pass / cap)&nbsp; .-> __end__;
+	visual_revise --> render;
+	classDef default fill:#f2f0ff,line-height:1.2
+	classDef first fill-opacity:0
+	classDef last fill:#bfb6fc

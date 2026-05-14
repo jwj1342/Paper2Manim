@@ -66,7 +66,7 @@ EMB 规模较小时（系统刚启动的前若干任务），检索结果信号�
 
 输出**结构化反馈**：`{score: 0–100, per_dim_scores: {...}, diagnostics: ["坐标轴标签和右侧球体重叠了", "动画过渡 0.3 秒太快, 观众跟不上"]}`。
 
-> 实现注记：当前代码（见 `paper2manim/agents/vlm_scene_reviewer.py` 与 `docs/vlm_experiment.md`）使用 6 维 × 1-5 分而非 3 维 × 0-100，主要是工程便利。论文主实验前需收敛到本节描述的 3 维 schema。
+> 实现注记：本节描述的 3 维 × 0-100 schema 已是当前代码的 canonical 形态（`paper2manim/agents/vlm_scene_reviewer.py:33-37`、PR #15）；早期 6 维 × 1-5 baseline 仅保留在 `docs/vlm_experiment.md` 附录 §A 作对照。
 
 ### 4.3 反思与局部迭代（Reflection & Iterative Refinement）
 
@@ -223,7 +223,7 @@ x 轴是累计处理的 paper-section 数。Hero Plot 上没有冷启动 / 稳�
 
 ## 7. MVP 演进路线图（与代码仓库对应）
 
-为了让"故事"落到能跑的代码上，我们把工程实现拆成三个 MVP，与本仓库的 `paper2manim/graphs/mvp{1,2,3}.py` 一一对应。**注意**：本提案的核心创新（§4.4 自进化）落在 MVP 3.0；MVP 1.0 / 2.0 是必要的能力前置铺垫。
+为了让"故事"落到能跑的代码上，我们把工程实现拆成三个 MVP，对应本仓库的 `paper2manim/graphs/`：MVP 1.0 → `mvp1.py`、MVP 2.0 / 3.0 共用父图 `mvp2.py`，MVP 3.0 的 per-scene 反思 + EMB 检索闭环在 `scene_graph.py` 子图里实现（PR #19 把 per-scene 循环抽出独立子图以支持 Send 并行）。**注意**：本提案的核心创新（§4.4 自进化）落在 MVP 3.0；MVP 1.0 / 2.0 是必要的能力前置铺垫。
 
 ### MVP 1.0：最短链路打通（PoC）
 
@@ -256,7 +256,7 @@ x 轴是累计处理的 paper-section 数。Hero Plot 上没有冷启动 / 稳�
   - §4.4 实现双桶 EMB + 蒸馏管线 + 检索注入。
   - 引入"进化曲线"作为系统级核心评估指标。
 - **冷启动**：bootstrap 批次（前 50–100 个 paper-section 任务）让 EMB 从空集起步；该批次内 Pass@1 偏低是预期行为，主要目的是产出初始记忆。bootstrap 段与稳态期使用完全相同的代码路径，差别仅在 EMB 规模。
-- **当前状态**：VLM 反思闭环（§4.2 + §4.3）已 land，详见 `docs/progress.md`；§4.1 的检索与 §4.4 的双通道沉淀尚未实现，是本提案下一步工程焦点。本提案的全部核心创新点（RQ1/2/3）都在此版本上完成实验。
+- **当前状态**：VLM 反思闭环（§4.2 + §4.3）已 land；§4.1 的检索与 §4.4 的双通道沉淀也已落地（PR #16 `paper2manim/emb/`：dual-channel schema + SQLite store + Faiss 检索 + 蒸馏 + RAG 注入，CLI `--emb` 开启）。剩余工程工作：cold-record pruning（[#17](https://github.com/jwj1342/Paper2Manim/issues/17)）与 RAG 注入位置 A/B（[#18](https://github.com/jwj1342/Paper2Manim/issues/18)）。本提案的全部核心创新点（RQ1/2/3）都在此版本上完成实验。
 
 ---
 

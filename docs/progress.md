@@ -1,6 +1,6 @@
 # Progress
 
-> 更新时间：2026-05-13（图执行从串行改并行——`fan_out_scenes` Send×N + render/LLM throttles；测试基线 189/189）
+> 更新时间：2026-05-13（图执行从串行改并行——`fan_out_scenes` Send×N + render/LLM throttles；测试基线 193/193）
 >
 > 历史里程碑：MVP 2.0 真实论文验收 → YAML 多 provider + 多模态标识 → MVP 3.0 阶段 2/3 VLM 接图（`docs/vlm_experiment.md`）→ proposal §4.2 canonical schema 落地 → 阶段 4 EMB 后端落地（双通道 success/failure + RAG 注入 + 蒸馏）→ 图并行计算。
 
@@ -19,7 +19,7 @@
 | Graphs（mvp1, mvp2） | 完成 | mvp1 保留串行；mvp2 改 fan-out（`parser → summarizer → storyboarder → Send×N run_scene → concat → emb_consolidate`），per-scene 包含完整反思 + VLM + EMB 检索闭环 |
 | Prompts | 完成 | 外置在 `prompts/*.md`，含 `vlm_scene_reviewer.md` + `visual_revision_agent.md` + `global_system.md` |
 | 多 provider + 多模态标识（YAML） | 完成 | `config.example.yaml` 模板（所有字段留空 + `$ENV_VAR` 引用）；`ModelConfig.supports_vision` / `auth_style` / `omit_temperature` 字段；`get_llm(role)` + `get_vlm()` 双入口；`provider` ∈ {openai_compatible, anthropic}，anthropic 支持 bearer auth（Azure Claude）；canonical roles ＝ {global_reader, scene_planner, scene_coder, render_fixer, final_summarizer, visual_reviser, vision_checker}，legacy alias（flash/pro/v2/v2-omni）继续可用 |
-| 测试 | 完成 | **189/189** 单测全绿（pytest -q）；含 `test_concurrency`（24）+ `test_llm_proxy`（13）+ `test_artifacts_concurrency`（4）+ `test_scene_graph`（17）+ EMB 套件 + 既有 VLM/parser/graph 测试 |
+| 测试 | 完成 | **193/193** 单测全绿（pytest -q）；含 `test_concurrency`（24）+ `test_llm_proxy`（13）+ `test_artifacts_concurrency`（4）+ `test_scene_graph`（17）+ EMB 套件 + 既有 VLM/parser/graph 测试 |
 | 输入解析（arXiv 源码 + 本地 PDF 兜底） | 完成 | `parsers/arxiv_source.py` + 分派 `parsers/__init__.py`；18 条新单测；SourceUnavailable 自动回退 Marker |
 | CI/CD（GitHub Actions） | 完成 | `.github/workflows/ci.yml`（pytest + ruff, py3.11/3.12 matrix）+ `codeql.yml`（每周 + 每次 PR） |
 | 分支保护 + Dependabot | 完成 | main 强制 PR + 3 个 check 必过 + 禁 force push；Dependabot 周更 pip / 月更 actions |
@@ -48,7 +48,7 @@
 - `paper2manim/prompts.py` — 从 `prompts/*.md` 加载（lru_cache 但 hash 在每次进程内）
 - `paper2manim/artifacts.py` — `runs/<run_id>/` 目录管理 + `trace.jsonl` 流水
 - `paper2manim/logging_setup.py` — logging.basicConfig + 可选 LangSmith hook
-- `paper2manim/cli.py` — click 子命令 `mvp1` / `mvp2` / `info`，含 `--no-render` / `--quality` / `--max-retries` / `--vlm` / `--no-vlm` / `--max-visual-revisions`（mvp2，default=2）/ `--pdf` 或 `--arxiv <id|url>` / `--section <name>` / `--allow-render-on-login` / login-node guard；mvp2 启动时根据 `max_retries × max_visual_revisions × n_scenes` 估算 recursion_limit 给 LangGraph（最小 200）
+- `paper2manim/cli.py` — click 子命令 `mvp1` / `mvp2` / `info`，含 `--no-render` / `--quality` / `--max-retries` / `--vlm` / `--no-vlm` / `--max-visual-revisions`（mvp2，default=2）/ `--pdf` 或 `--arxiv <id|url>` / `--section <name>` / `--emb` 系列 / `--scene-parallelism` / `--render-concurrency` / `--llm-rps` / `--allow-render-on-login` / login-node guard；父图 `recursion_limit = 50`（扁平 fan-out），每个 `run_scene` 内部对子图单独按 `max(60, 6 + 3·(max_retries+1) + 5·max_visual_revisions + 4)` 算（`graphs/mvp2.py:152`）
 
 ### Schemas
 - `paper2manim/schemas/storyboard.py` — `SceneModel` / `StoryboardModel`（含 PascalCase 校验）
@@ -97,7 +97,7 @@
 - `tests/test_graph_mvp2.py`（**4 用例**：反思闭环两次 latex error 后第三次成功；max_retries=1 give_up；parser fatal 早退；render_node 缺 storyboard 守卫）
 - `tests/test_graph_mvp2_vlm.py`（**8 用例**：pass 短路 / revise→pass / 触 cap / vlm 关闭 / VLM 判 fail 不剔出 rendered_videos（soft-fail）/ vlm_review 抛异常时 auto-pass / 跨 scene 混合 verdict / **avg ≥ 90 auto-pass bypass 端到端**）
 - `tests/test_vlm_response_parse.py`（**10 用例**：两个 JSON 对象输入只取第一个 / 嵌套花括号 / 字符串内花括号 / 不平衡输入返回 None / chatty 模型先思考再 JSON / 缺失维度记 None / [0,100] clamp / avg ≥ 90 auto-pass / avg < 90 不 auto-pass / 全空 scores 不 auto-pass）
-- 当前结果：**65/65 通过**（pytest -q，ruff clean）
+- 当前结果：**193/193 通过**（pytest -q，ruff clean）
 
 ### 端到端验收
 - **MVP 1.0** 真实跑通：`examples/mvp1/pythagorean.txt` → `runs/20260510-080654-3a1159/final/output.mp4`，时长 10.47s，854×480@15fps，h264，87.7 KB
@@ -183,7 +183,7 @@ proposal §4.4 描述的双通道 Episodic Memory Bank 后端整套落地：
 
 - **`paper2manim/emb/schema.py`** — Pydantic v2 dual-body schema：success/failure 共享 `(context, provenance)` 头，body 按 polarity 分（`SuccessBody` 含 rationale + final_code；`FailureBody` 含 lesson + anti-/good-example pair + score delta）
 - **`paper2manim/emb/store.py`** — SQLite store，provenance-keyed dedup（`source_paper + source_section + scene_id + transition_ordinal`）防止重复跑同一 section 时 EMB 单调膨胀
-- **`paper2manim/emb/index/`** — Faiss-or-fallback in-memory；sentence-transformers `all-MiniLM-L6-v2` + HashEmbedder 兜底（首次启动 / CI / 无网络场景）
+- **`paper2manim/emb/index.py` + `paper2manim/emb/embedder.py`** — Faiss-or-fallback in-memory index + sentence-transformers `all-MiniLM-L6-v2` / HashEmbedder 兜底（首次启动 / CI / 无网络场景）
 - **`paper2manim/emb/manager.py`** — `EpisodicMemoryBank` facade：`add_success / add_failure / query` 加 `hit_count` / `last_used` / `first_seen` provenance 字段（issue #17 cold-record pruning 即基于此）
 - **`paper2manim/emb/distill.py`** — `consolidate_run`：扫一次 `trace.jsonl` + `attempts/`，按 `theta_high`（默认 4.0）筛 success records、按 `failure_min_margin`（默认 0.5）筛 failure transitions，调用注入的 `rationale_writer` / `lesson_distiller`（LLM 或 mock）写 body
 - **`paper2manim/emb/retrieval.py`** — `retrieve_for_scene`：scene 描述向量 → top-k success + top-k failure → `to_state_dict()` 输出 wire-format
@@ -263,8 +263,17 @@ Schema 收敛：`visual_revision_decisions` 从 `list[str]` 改成 PR #15 的 `l
 - [x] 真实实验：5 scenes / Azure Claude Sonnet 4.6 / cap=2，平均 Δavg=+0.20，详见 `docs/vlm_experiment.md`
 - [x] Opus 4.7 端到端验证：5/5 scenes, 14 attempts, concat 84.4s mp4, 0 fatal_error
 
-#### 阶段 4（EMB / 自进化）— **暂不考虑**
-> Proposal §4 + §7 的核心创新点（情景记忆库 + 知识蒸馏 + 进化曲线）保留作为未来工作的描述锚点；本仓库当前**不实现** EMB / 检索 / High-Score Rationale 写入。任何 PR / commit 中提及"自进化"或"EMB"仅作 proposal 引用，不构成实现承诺。
+#### 阶段 4（EMB / 自进化）— **后端已完成（PR #16），剩 cold-record pruning + RAG A/B**
+- [x] 双通道 schema（`paper2manim/emb/schema.py`，success + failure 共享 context/provenance 头，body 按极性分歧）
+- [x] SQLite store + provenance-keyed dedup（`emb/store.py`）
+- [x] Faiss / in-memory fallback index + sentence-transformers / HashEmbedder（`emb/index.py` + `emb/embedder.py`）
+- [x] `EpisodicMemoryBank` facade（`emb/manager.py`：`add_success / add_failure / query` + `hit_count` / `last_used` / `first_seen` provenance）
+- [x] `consolidate_run` 蒸馏（`emb/distill.py`，扫 `trace.jsonl` + `attempts/` 按 `theta_high` / `failure_min_margin` 筛 + 注入 rationale_writer / lesson_distiller）
+- [x] `retrieve_for_scene` 检索（`emb/retrieval.py`，per-scene top-k success / failure 注入 coder prompt）
+- [x] 父图 `emb_consolidate` 节点 + 子图 `emb_retrieve` 节点；coder prompt 增 `## Reference Examples` / `## Known Pitfalls` 段
+- [x] CLI 全套：`--emb` / `--emb-store-path` / `--emb-theta-high` / `--emb-failure-min-margin` / `--emb-llm-distill` / `--emb-fake-embedder`
+- [ ] [#17 Cold record pruning by hit_count / last_used](https://github.com/jwj1342/Paper2Manim/issues/17)
+- [ ] [#18 [EMB] A/B protocol for RAG injection position in Coder prompt](https://github.com/jwj1342/Paper2Manim/issues/18)
 
 #### 阶段 2/3 已知不足（在 `docs/vlm_experiment.md` 详述）
 - [x] ~~评分 schema 对齐 proposal~~ — issue #12 已解：收敛为 3 维（logic_flow / layout_occlusion / accuracy，0-100）

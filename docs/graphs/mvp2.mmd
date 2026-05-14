@@ -8,28 +8,20 @@ graph TD;
 	parser(parser)
 	summarizer(summarizer)
 	storyboarder(storyboarder)
-	init_scene(init_scene)
-	coder(coder)
-	render(render)
-	reviewer(reviewer)
-	advance(advance)
+	run_scene(run_scene)
 	concat(concat)
+	emb_consolidate(emb_consolidate)
 	__end__([<p>__end__</p>]):::last
 	__start__ --> parser;
-	advance -.-> concat;
-	advance -.-> init_scene;
-	coder --> render;
-	init_scene --> coder;
 	parser -. &nbsp;END&nbsp; .-> __end__;
 	parser -. &nbsp;next&nbsp; .-> summarizer;
-	render --> reviewer;
-	reviewer -.-> advance;
-	reviewer -.-> coder;
-	storyboarder -. &nbsp;END&nbsp; .-> __end__;
-	storyboarder -. &nbsp;next&nbsp; .-> init_scene;
 	summarizer -. &nbsp;END&nbsp; .-> __end__;
 	summarizer -. &nbsp;next&nbsp; .-> storyboarder;
-	concat --> __end__;
+	storyboarder -. &nbsp;END&nbsp; .-> __end__;
+	storyboarder -. &nbsp;Send x N&nbsp; .-> run_scene;
+	run_scene --> concat;
+	concat --> emb_consolidate;
+	emb_consolidate --> __end__;
 	classDef default fill:#f2f0ff,line-height:1.2
 	classDef first fill-opacity:0
 	classDef last fill:#bfb6fc
