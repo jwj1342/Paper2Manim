@@ -172,6 +172,7 @@ def run_scene_node(payload: dict[str, Any]) -> dict[str, Any]:
 
     attempts = final.get("attempts", [])
     last_rr = attempts[-1].get("render_result", {}) if attempts else {}
+    renditions = final.get("scene_renditions", []) or []
     # NB: per-scene fields like ``retrieved_success`` / ``retrieved_failure`` /
     # ``current_code`` are deliberately NOT bubbled back to PaperState. Two
     # parallel branches each returning their own values would trigger
@@ -195,8 +196,50 @@ def run_scene_node(payload: dict[str, Any]) -> dict[str, Any]:
         ],
     }
     if last_rr.get("status") == "success" and last_rr.get("video_path"):
-        updates["rendered_videos"] = [last_rr["video_path"]]
-        log.info("[run_scene] %s OK -> %s", scene_name, last_rr["video_path"])
+        # Best-of-N: when the VLM scored multiple renditions, ship the
+        # highest-scoring video — not the most recent. The visual-revise loop
+        # sometimes produces a strictly worse v(N+1) (see
+        # docs/vlm_experiment.md regression case); shipping the latest in that
+        # case puts a worse video in ``rendered_videos`` AND a worse code in
+        # EMB.success (because emb/distill.py:find_scored_scenes already picks
+        # the highest-VLM-avg v_rev). Aligning ``rendered_videos`` with the
+        # same v_rev keeps the two artifacts coherent.
+        chosen = _pick_best_rendition(renditions, scene_name) or {
+            "video_path": last_rr["video_path"],
+            "v_rev": final.get("vlm_revision_count", 0),
+            "avg_score": None,
+        }
+        chosen_video = chosen.get("video_path") or last_rr["video_path"]
+        updates["rendered_videos"] = [chosen_video]
+        if chosen_video != last_rr.get("video_path"):
+            try:
+                append_trace(
+                    final.get("run_id", ""),
+                    "advance",
+                    {
+                        "scene": scene_name,
+                        "chose": {
+                            "v_rev": chosen.get("v_rev"),
+                            "avg_score": chosen.get("avg_score"),
+                            "video_path": chosen_video,
+                        },
+                        "skipped_last": {
+                            "v_rev": final.get("vlm_revision_count", 0),
+                            "video_path": last_rr.get("video_path"),
+                        },
+                    },
+                )
+            except Exception:  # noqa: BLE001
+                pass
+            log.info(
+                "[run_scene] %s best-of-N picked v%s (score=%s) over latest v%d",
+                scene_name,
+                chosen.get("v_rev"),
+                chosen.get("avg_score"),
+                final.get("vlm_revision_count", 0),
+            )
+        else:
+            log.info("[run_scene] %s OK -> %s", scene_name, chosen_video)
     else:
         updates["skipped_scenes"] = [scene_name]
         log.warning(
@@ -205,6 +248,32 @@ def run_scene_node(payload: dict[str, Any]) -> dict[str, Any]:
             len(attempts),
         )
     return updates
+
+
+def _pick_best_rendition(
+    renditions: list[dict], scene_name: str
+) -> dict | None:
+    """Return the highest-``avg_score`` rendition for ``scene_name``, or None.
+
+    Renditions without a usable ``video_path`` or with ``avg_score is None``
+    are not eligible — those signal frame-sampler failure or auto-pass
+    branches where the VLM never produced a comparable score. With ties on
+    score, prefer the earliest v_rev so we don't reward a tie-with-regression.
+    Returns ``None`` when no eligible rendition exists; the caller falls back
+    to "last attempt" semantics in that case.
+    """
+    eligible = [
+        r for r in renditions
+        if r.get("scene") == scene_name
+        and r.get("video_path")
+        and r.get("avg_score") is not None
+    ]
+    if not eligible:
+        return None
+    return max(
+        eligible,
+        key=lambda r: (float(r["avg_score"]), -int(r.get("v_rev", 0))),
+    )
 
 
 # --------------------------------------------------------------------------- #

@@ -114,6 +114,16 @@ class SceneState(TypedDict, total=False):
     # subgraph appends the dict; the surrounding ``run_scene_node`` flushes
     # the per-scene reducer up to ``PaperState.visual_revision_decisions``.
     visual_revision_decisions: Annotated[list[dict[str, str]], operator.add]
+    # Per-(v_rev) rendition log used by ``run_scene_node`` to ship the
+    # *highest-scoring* version's video_path (best-of-N), not whichever
+    # rendition happened to be last. Each entry, appended once per
+    # ``vlm_review`` invocation:
+    #   {scene, v_rev, video_path, code, avg_score, decision}
+    # Without this, the v1=85 → v2=60 regression case (docs/vlm_experiment.md)
+    # would ship the worse v2 video. EMB.success already picks the
+    # highest-VLM-avg v_rev (emb/distill.py:find_scored_scenes), so post-fix
+    # the same v_rev is in both the final video and the EMB record.
+    scene_renditions: Annotated[list[dict], operator.add]
 
 
 # --------------------------------------------------------------------------- #
@@ -281,6 +291,16 @@ def vlm_review_node(state: SceneState) -> dict[str, Any]:
     montage = state.get("current_montage_path")
     scene = state.get("scene") or {}
     scene_name = scene.get("name") if scene else "<unknown>"
+    v_rev = int(state.get("vlm_revision_count", 0))
+    # Latest attempt produced ``current_montage_path``; pull its video_path so
+    # the rendition record points at the actual mp4 ``run_scene_node`` would
+    # otherwise ship.
+    attempts = state.get("attempts", [])
+    last_video = (
+        (attempts[-1].get("render_result") or {}).get("video_path") if attempts else None
+    )
+    current_code = state.get("current_code") or ""
+
     if not montage or not scene:
         log.warning("[vlm_review] missing montage or scene; auto-pass")
         review = {
@@ -289,6 +309,10 @@ def vlm_review_node(state: SceneState) -> dict[str, Any]:
             "scores": {},
             "revision_instruction": "",
         }
+        # No rendition recorded: without a montage there was no real review,
+        # so this version has no comparable score. ``run_scene_node`` falls
+        # back to "last attempt" semantics when the rendition log is empty
+        # for this scene.
         return {
             "last_visual_review": review,
             "visual_revision_decisions": [{"scene": scene_name, "decision": "pass"}],
@@ -315,16 +339,25 @@ def vlm_review_node(state: SceneState) -> dict[str, Any]:
         "vlm_review",
         {
             "scene": scene.get("name"),
-            "v_rev": state.get("vlm_revision_count", 0),
+            "v_rev": v_rev,
             "decision": review.get("decision"),
             "scores": review.get("scores"),
         },
     )
+    rendition = {
+        "scene": scene_name,
+        "v_rev": v_rev,
+        "video_path": last_video,
+        "code": current_code,
+        "avg_score": review.get("average_score"),
+        "decision": str(review.get("decision", "pass")),
+    }
     return {
         "last_visual_review": review,
         "visual_revision_decisions": [
             {"scene": scene_name, "decision": str(review.get("decision", "pass"))}
         ],
+        "scene_renditions": [rendition],
     }
 
 
