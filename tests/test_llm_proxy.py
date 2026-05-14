@@ -175,3 +175,105 @@ class TestChainPropagation:
         wrapped = proxy.bind_tools([{"name": "tool"}])
         assert isinstance(wrapped, RateLimitedLLM)
         assert wrapped._llm is bound  # noqa: SLF001
+
+    def test_bind_returns_wrapped_and_invoke_throttled(self):
+        """``llm.bind(stop=...)`` must keep the throttle on its .invoke()."""
+        inner = MagicMock()
+        bound = MagicMock()
+        bound.invoke.return_value = "bound-out"
+        inner.bind.return_value = bound
+        proxy = RateLimitedLLM(inner)
+        wrapped = proxy.bind(stop=["x"])
+        assert isinstance(wrapped, RateLimitedLLM)
+        assert wrapped._llm is bound  # noqa: SLF001
+
+        order: list[str] = []
+
+        class _RecordingBucket:
+            def acquire(self):
+                order.append("acquire")
+
+        concurrency.LLM_BUCKET = _RecordingBucket()  # type: ignore[assignment]
+        bound.invoke.side_effect = lambda *_a, **_kw: (order.append("invoke") or "bound-out")
+        wrapped.invoke("hello")
+        assert order == ["acquire", "invoke"]
+
+    def test_with_config_returns_wrapped_and_invoke_throttled(self):
+        """``llm.with_config({"tags": [...]})`` must keep the throttle."""
+        inner = MagicMock()
+        configured = MagicMock()
+        configured.invoke.return_value = "cfg-out"
+        inner.with_config.return_value = configured
+        proxy = RateLimitedLLM(inner)
+        wrapped = proxy.with_config({"tags": ["agent_x"]})
+        assert isinstance(wrapped, RateLimitedLLM)
+        assert wrapped._llm is configured  # noqa: SLF001
+
+        order: list[str] = []
+
+        class _RecordingBucket:
+            def acquire(self):
+                order.append("acquire")
+
+        concurrency.LLM_BUCKET = _RecordingBucket()  # type: ignore[assignment]
+        configured.invoke.side_effect = lambda *_a, **_kw: (
+            order.append("invoke") or "cfg-out"
+        )
+        wrapped.invoke("hello")
+        assert order == ["acquire", "invoke"]
+
+    def test_with_retry_returns_throttled_wrapper(self):
+        """``llm.with_retry(...).invoke(x)`` must hit the bucket on each
+        outer invocation.
+
+        Caveat: internal retry attempts inside ``RunnableRetry.invoke`` still
+        call the bare ``_llm.invoke`` (langchain's internals), so a single
+        outer call that retries N times consumes one token, not N. This
+        matches the cost model of ``with_structured_output`` (one acquire
+        per outer chain invoke, regardless of how many inner network calls
+        the chain makes). The fix here closes the obvious gap — pre-fix,
+        the outer wrapper itself was missing, so zero tokens were
+        consumed."""
+        inner = MagicMock()
+        retried = MagicMock()
+        retried.invoke.return_value = "retry-success"
+        inner.with_retry.return_value = retried
+        proxy = RateLimitedLLM(inner)
+        wrapped = proxy.with_retry(stop_after_attempt=3)
+        assert isinstance(wrapped, _ThrottledRunnable)
+        assert wrapped._runnable is retried  # noqa: SLF001
+
+        order: list[str] = []
+
+        class _RecordingBucket:
+            def acquire(self):
+                order.append("acquire")
+
+        concurrency.LLM_BUCKET = _RecordingBucket()  # type: ignore[assignment]
+        retried.invoke.side_effect = lambda *_a, **_kw: (
+            order.append("invoke") or "retry-success"
+        )
+        wrapped.invoke("hi")
+        assert order == ["acquire", "invoke"]
+
+    def test_with_fallbacks_returns_throttled_wrapper(self):
+        """``llm.with_fallbacks([fb1, fb2]).invoke(...)`` must hit the bucket."""
+        inner = MagicMock()
+        fb_chain = MagicMock()
+        fb_chain.invoke.return_value = "fb-out"
+        inner.with_fallbacks.return_value = fb_chain
+        proxy = RateLimitedLLM(inner)
+        wrapped = proxy.with_fallbacks([MagicMock(), MagicMock()])
+        assert isinstance(wrapped, _ThrottledRunnable)
+        assert wrapped._runnable is fb_chain  # noqa: SLF001
+
+        order: list[str] = []
+
+        class _RecordingBucket:
+            def acquire(self):
+                order.append("acquire")
+
+        concurrency.LLM_BUCKET = _RecordingBucket()  # type: ignore[assignment]
+        fb_chain.invoke.side_effect = lambda *_a, **_kw: (order.append("invoke") or "fb-out")
+        wrapped.invoke("hi")
+        assert order == ["acquire", "invoke"]

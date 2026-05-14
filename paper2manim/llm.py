@@ -431,6 +431,26 @@ class RateLimitedLLM:
     def bind_tools(self, *args: Any, **kwargs: Any) -> RateLimitedLLM:
         return RateLimitedLLM(self._llm.bind_tools(*args, **kwargs))
 
+    def bind(self, *args: Any, **kwargs: Any) -> RateLimitedLLM:
+        """``llm.bind(stop=...)`` style — bound client stays throttled."""
+        return RateLimitedLLM(self._llm.bind(*args, **kwargs))
+
+    def with_config(self, *args: Any, **kwargs: Any) -> RateLimitedLLM:
+        """``llm.with_config({"tags": [...]})`` — config-bound client stays throttled."""
+        return RateLimitedLLM(self._llm.with_config(*args, **kwargs))
+
+    def with_retry(self, *args: Any, **kwargs: Any) -> _ThrottledRunnable:
+        """Retry chain — each *retry attempt* also passes through the bucket.
+
+        Without this wrapper langchain's ``RunnableRetry.invoke`` would call
+        ``self._llm.invoke`` directly N times on transient failures, defeating
+        the throttle exactly where it matters most (429 storms)."""
+        return _ThrottledRunnable(self._llm.with_retry(*args, **kwargs))
+
+    def with_fallbacks(self, *args: Any, **kwargs: Any) -> _ThrottledRunnable:
+        """Fallback chain — primary and fallback calls both pass through the bucket."""
+        return _ThrottledRunnable(self._llm.with_fallbacks(*args, **kwargs))
+
     def __or__(self, other: Any) -> _ThrottledRunnable:
         return _ThrottledRunnable(self._llm | other)
 
