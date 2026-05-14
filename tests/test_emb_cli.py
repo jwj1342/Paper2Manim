@@ -320,3 +320,160 @@ class TestEmbCli:
         ])
         assert result.exit_code != 0
         assert "EMB store not found" in result.output
+
+
+# --------------------------------------------------------------------------- #
+# retest
+# --------------------------------------------------------------------------- #
+
+
+class TestEmbRetest:
+    """``retest`` must read the montage that produced ``vlm_score``.
+
+    The accepted version is often v1/v2 (revised) — comparing against the v0
+    montage would mark every revised-then-passed scene as decayed.
+    """
+
+    def _put_success_with_v_rev(self, store_path, *, run_id, scene_id, vlm_score, final_v_rev):
+        emb = build_default_emb(str(store_path), use_real_embedder=False)
+        emb.put(MemoryRecord(
+            polarity="success",
+            context=Context(task_text="scene desc", source_paper="arxiv:x"),
+            body=SuccessBody(rationale="r", code_full="# code"),
+            provenance=Provenance(
+                run_id=run_id, scene_id=scene_id,
+                extraction_source="high_score_scene",
+                validated=True, vlm_score=vlm_score,
+                final_v_rev=final_v_rev,
+            ),
+        ))
+        emb.save_indices()
+
+    def _make_montage(self, runs_dir, run_id, scene_id, v_rev):
+        d = runs_dir / run_id / "vlm_frames"
+        d.mkdir(parents=True, exist_ok=True)
+        path = d / f"{scene_id}_v{v_rev}.png"
+        # Minimal 1×1 PNG header so the file is non-empty.
+        path.write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * 16)
+        return path
+
+    def test_retest_uses_final_v_rev_not_v0(
+        self, runner, tmp_path, _isolated_runs_dir, monkeypatch
+    ):
+        """Scene revised v0(score=30) → v1(score=90, accepted). retest must
+        load v1.png and pass v1's review back, not load v0 and report decay."""
+        store = tmp_path / "emb_store"
+        store.mkdir()
+        self._put_success_with_v_rev(
+            store, run_id="run-rev", scene_id="SceneRev",
+            vlm_score=90.0, final_v_rev=1,
+        )
+        runs_dir = _isolated_runs_dir
+        v0 = self._make_montage(runs_dir, "run-rev", "SceneRev", 0)
+        v1 = self._make_montage(runs_dir, "run-rev", "SceneRev", 1)
+
+        seen: dict = {}
+
+        def fake_review(scene, montage_path):
+            seen["montage"] = montage_path
+            return {"average_score": 88.0}  # close to vlm_score=90, no decay
+
+        monkeypatch.setattr(
+            "paper2manim.agents.vlm_scene_reviewer.review_scene", fake_review
+        )
+
+        result = runner.invoke(cli, [
+            "emb", "retest", "--store-path", str(store),
+            "--sample", "10", "--score-margin", "5.0",
+        ])
+        assert result.exit_code == 0, result.output
+        assert seen["montage"] == str(v1), (
+            f"retest should read final_v_rev=1 montage ({v1}), got {seen['montage']}"
+        )
+        assert "decayed candidates: 0/" in result.output
+        assert v0.exists()  # not loaded but not deleted either
+
+    def test_retest_legacy_record_with_default_v_rev_uses_v0(
+        self, runner, tmp_path, _isolated_runs_dir, monkeypatch
+    ):
+        """Pre-PR records have final_v_rev=0 (Pydantic default). retest should
+        still locate the v0 montage and not crash."""
+        store = tmp_path / "emb_store"
+        store.mkdir()
+        self._put_success_with_v_rev(
+            store, run_id="run-legacy", scene_id="SceneLegacy",
+            vlm_score=87.0, final_v_rev=0,
+        )
+        runs_dir = _isolated_runs_dir
+        v0 = self._make_montage(runs_dir, "run-legacy", "SceneLegacy", 0)
+
+        seen: dict = {}
+
+        def fake_review(scene, montage_path):
+            seen["montage"] = montage_path
+            return {"average_score": 86.0}
+
+        monkeypatch.setattr(
+            "paper2manim.agents.vlm_scene_reviewer.review_scene", fake_review
+        )
+        result = runner.invoke(cli, [
+            "emb", "retest", "--store-path", str(store), "--sample", "10",
+        ])
+        assert result.exit_code == 0, result.output
+        assert seen["montage"] == str(v0)
+
+
+# --------------------------------------------------------------------------- #
+# Provenance.final_v_rev round-trip
+# --------------------------------------------------------------------------- #
+
+
+def test_provenance_final_v_rev_round_trips_through_sqlite(tmp_path):
+    """final_v_rev (added to support retest) must survive store.put -> get."""
+    p = tmp_path / "emb_store"
+    p.mkdir()
+    emb = build_default_emb(str(p), use_real_embedder=False)
+    rec = MemoryRecord(
+        polarity="success",
+        context=Context(task_text="t", source_paper="arxiv:rt"),
+        body=SuccessBody(rationale="r", code_full="# code"),
+        provenance=Provenance(
+            run_id="rt", scene_id="S",
+            extraction_source="high_score_scene",
+            validated=True, vlm_score=92.0,
+            final_v_rev=2,
+        ),
+    )
+    rid = emb.put(rec)
+    loaded = emb.get(rid)
+    assert loaded.provenance.final_v_rev == 2
+
+
+def test_distill_success_record_records_final_v_rev(tmp_path, monkeypatch):
+    """distill_success_records must propagate ScoredScene.final_v_rev into
+    Provenance so retest can read the right montage."""
+    from paper2manim.emb.distill import (
+        ScoredScene,
+        distill_success_records,
+    )
+
+    fake = ScoredScene(
+        name="SceneRev",
+        final_v_rev=2,
+        final_score=91.0,
+        final_code="from manim import *\nclass SceneRev: pass",
+        final_montage_path=None,
+        final_video_path=None,
+        had_vlm_review=True,
+    )
+    monkeypatch.setattr(
+        "paper2manim.emb.distill.parse_trace", lambda _rid: {}
+    )
+    monkeypatch.setattr(
+        "paper2manim.emb.distill.find_scored_scenes",
+        lambda _rid, _scenes: [fake],
+    )
+    recs = distill_success_records("run-x", theta_high=85.0)
+    assert len(recs) == 1
+    assert recs[0].provenance.final_v_rev == 2
+    assert recs[0].provenance.vlm_score == 91.0

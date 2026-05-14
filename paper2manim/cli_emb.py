@@ -458,10 +458,15 @@ def retest_cmd(store_path: str | None, sample: int, score_margin: float) -> None
             unverifiable.append(r.id[:8])
             continue
         # Reconstruct the montage path. Convention: runs/<run_id>/vlm_frames/<scene>_v<n>.png
+        # ``final_v_rev`` is the v_rev whose VLM score was stored as ``vlm_score``;
+        # comparing the new score against ``vlm_score`` is only meaningful if we
+        # re-score the same frame. Older records (pre-PR introducing the field)
+        # default to 0, which matches their actual final_v_rev.
+        v_rev = r.provenance.final_v_rev
         montage = (
             Path(settings.PAPER2MANIM_RUNS_DIR)
             / r.provenance.run_id / "vlm_frames"
-            / f"{r.provenance.scene_id}_v0.png"
+            / f"{r.provenance.scene_id}_v{v_rev}.png"
         )
         if not montage.exists():
             unverifiable.append(r.id[:8])
