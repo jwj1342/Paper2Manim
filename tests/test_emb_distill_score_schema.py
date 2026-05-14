@@ -38,7 +38,6 @@ from paper2manim.emb.schema import (
     SuccessBody,
 )
 
-
 # --------------------------------------------------------------------------- #
 # Helpers (mirror tests/test_emb_phase2.py for cohesion)
 # --------------------------------------------------------------------------- #
