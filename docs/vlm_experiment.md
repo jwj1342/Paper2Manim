@@ -126,7 +126,7 @@
 | 3 | **best-of-N 没保留** — 最后一版未必最好 | 🟡 未解：当前实现只保留最后一版 rendered video；遇到 v1 > v2 时（旧 baseline TitleIntro v1=2.83→v2=2.50；新 baseline 未出现明显 case）输出反而劣化。需在 state 累积 (rendered_video, avg) 列表，advance 时挑 max |
 | 4 | 部分维度受限于渲染分辨率 | 🟡 未解：`layout_occlusion` 在 480p15 下天然吃亏（ArchitectureComparison 三次 revision 都卡在 45）。三个改进选项：(a) 渲染升 720p30 后再喂 VLM；(b) prompt 里告诉 VLM "renderer is 480p15, do not penalize subpixel readability"；(c) 给 layout_occlusion 加权重折扣 |
 | 5 | 单一 VLM = 单一 model，没法做 RQ2（Human-VLM 一致性） | 🟡 future work；暂不在本 PR 范围 |
-| 6 | EMB 完全没做 | proposal §4 阶段 4，**暂不考虑** |
+| 6 | ~~EMB 完全没做~~ | ✅ **PR #16 已 land**：`paper2manim/emb/` 双通道 schema + SQLite store + Faiss 检索 + 蒸馏 + RAG 注入；CLI `--emb` 开启。剩余 cold-record pruning（#17）与 RAG 注入位置 A/B（#18），不在本实验范围 |
 | 7 | auto-pass bypass 阈值 90 在本次 baseline 触发 0 次 | 🟡 数据不足，留待更多 baseline 后再调（候选：降到 80） |
 
 ---

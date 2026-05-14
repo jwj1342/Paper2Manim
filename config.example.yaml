@@ -8,6 +8,8 @@
 # auth_style:    "header_api_key" (default; SDK picks Bearer for openai, x-api-key for anthropic)
 #                | "bearer"       (force Authorization: Bearer — required for Azure-hosted Claude)
 # supports_vision / supports_thinking: declared capabilities used by the LLM/VLM factory.
+# omit_temperature: set true for endpoints that reject the `temperature` param
+#                   (e.g. Azure-hosted Claude Opus 4.7 returns 400 deprecated).
 # -----------------------------------------------------------------------------
 
 models:
@@ -52,6 +54,7 @@ models:
     supports_vision: true
     supports_thinking: false
     # auth_style: bearer                 # uncomment for Azure-hosted Claude
+    # omit_temperature: true             # required for Azure-hosted Claude Opus 4.7
 
 # Role-to-model mapping. Canonical roles consumed by the LangGraph nodes.
 model_roles:
@@ -65,4 +68,4 @@ model_roles:
 
 # VLM Multi-Dim Scoring loop knobs are CLI-driven, not YAML:
 #   paper2manim mvp2 --vlm --max-visual-revisions N
-# (frame_sample_count is hard-coded to 4 in graphs/mvp2.py.frame_sampler_node.)
+# (frame_sample_count is hard-coded to 4 in graphs/scene_graph.py.frame_sampler_node.)

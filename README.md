@@ -90,7 +90,7 @@ cp .env.example .env
 |---|---|---|
 | `MIMO_API_KEY` | 必填 | MiMo Token Plan 的 `tp-` 前缀 key |
 | `MIMO_BASE_URL` | 默认即可 | `https://token-plan-cn.xiaomimimo.com/v1`（**注意不是** `api.xiaomimimo.com`，那个端点不认 `tp-` key） |
-| `PAPER2MANIM_DEFAULT_MODEL` | 默认即可 | `flash`（→ `mimo-v2.5`）/ `pro`（→ `mimo-v2.5-pro`）/ `v2`（→ `mimo-v2-pro`，备用） |
+| `PAPER2MANIM_DEFAULT_MODEL` | 默认即可 | `flash`（→ `mimo-v2.5`）/ `pro`（→ `mimo-v2.5-pro`）/ `v2`（→ `mimo-v2-pro`，备用）/ `v2-omni`（→ `mimo-v2-omni`） |
 | `PAPER2MANIM_MAX_RETRIES` | 默认即可 | MVP 2.0 反思循环每个 scene 的最大重试轮数（默认 3） |
 | `PAPER2MANIM_QUALITY` | 默认即可 | Manim 渲染质量 `l`/`m`/`h`（480p15 / 720p30 / 1080p60） |
 | `PAPER2MANIM_RUNS_DIR` | 默认即可 | 运行产物目录，默认是项目根下的 `runs/` |
@@ -214,9 +214,11 @@ Paper2Manim/
 │   ├── cli.py                   click 命令行入口；子命令 mvp1 / mvp2 / info
 │   ├── config/                  pydantic-settings 包
 │   │   ├── env.py                 从 .env 读取运行时配置（MIMO_API_KEY 等）
-│   │   └── settings.py            YAML-based AppSettings（多 provider 模型注册）
-│   ├── llm.py                   MiMo (Xiaomi Token Plan) 客户端工厂
-│   │                            含模型 alias：flash → mimo-v2.5, pro → mimo-v2.5-pro
+│   │   ├── model_config.py        ModelConfig / ModelSettings：多 provider 模型注册 + role 查表
+│   │   └── config_loader.py       config.yaml + $ENV_VAR 展开 + role 表校验
+│   ├── llm.py                   YAML 路由的多 provider LLM 工厂 + env-MiMo 兜底
+│   │                            legacy alias: flash → mimo-v2.5, pro → mimo-v2.5-pro,
+│   │                            v2 → mimo-v2-pro, v2-omni → mimo-v2-omni
 │   │                            + safe_structured_invoke（C3 修复，schema drift 重试）
 │   ├── state.py                 LangGraph 共享状态 TypedDict (PaperState)
 │   │                            所有 agent 节点的输入输出契约都在这里
@@ -263,7 +265,9 @@ Paper2Manim/
 │   ├── emb/                      ← Episodic Memory Bank（MVP 3.0 阶段 4 后端）
 │   │   ├── schema.py              双通道 Pydantic v2 schema：success body + failure body
 │   │   ├── store.py               SQLite store + provenance-keyed dedup
-│   │   ├── index/                 Faiss + in-memory fallback；sentence-transformers + HashEmbedder
+│   │   ├── index.py               Faiss + in-memory fallback
+│   │   ├── embedder.py            sentence-transformers + HashEmbedder
+│   │   ├── exceptions.py          EMB 专用异常
 │   │   ├── manager.py             EpisodicMemoryBank facade（query / add / stats / delete）
 │   │   ├── distill.py             consolidate_run：trace → 蒸馏 records 入库
 │   │   ├── retrieval.py           retrieve_for_scene：scene → top-k success / failure 注入
@@ -299,7 +303,7 @@ Paper2Manim/
 │
 ├── config.example.yaml        ← AppSettings YAML 模板（多 provider 模型注册表）
 │
-├── tests/                     ← pytest 测试套件（189/189 通过）
+├── tests/                     ← pytest 测试套件（193 测试全绿）
 │   ├── conftest.py              共享 fixtures（隔离 runs 目录、mock LLM）
 │   ├── test_classify.py         错误分类用例 + 静态检查器集成（D1/D4）
 │   ├── test_llm_client.py       MiMo client 边界条件（key 缺失、未知 alias）

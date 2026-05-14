@@ -6,12 +6,14 @@ Live diagrams of the LangGraph `StateGraph` topologies. Re-generate with:
 python -c "
 from paper2manim.graphs.mvp1 import build_mvp1_graph
 from paper2manim.graphs.mvp2 import build_mvp2_graph
+from paper2manim.graphs.scene_graph import build_scene_graph
 print(build_mvp1_graph().get_graph().draw_mermaid())
 print(build_mvp2_graph().get_graph().draw_mermaid())
+print(build_scene_graph().get_graph().draw_mermaid())
 "
 ```
 
-`.mmd` source files are in `docs/graphs/`. GitHub renders the fenced blocks below natively.
+`.mmd` source files are in `docs/graphs/` (`mvp1.mmd` / `mvp2.mmd` / `scene_graph.mmd`). GitHub renders the fenced blocks below natively.
 
 ---
 
@@ -42,14 +44,15 @@ graph TD;
 
 ---
 
-## MVP 2.0 — 含反思纠错的多场景闭环
+## MVP 2.0 — fan-out 并行 + 双反思闭环
 
-PDF / arXiv → N 个 scene → 每个 scene 内 reflection loop → concat。两个 conditional edge（虚线箭头）：
+PDF / arXiv → 拆 N 个 scene → 每个 scene 通过 `langgraph.types.Send` 分发到独立的 per-scene 子图并发跑 → concat → EMB 蒸馏。**父图扁平**，所有反思（文本 + 视觉）和 EMB 检索都在子图里。
 
-- **reviewer** → `coder`（retry）或 `advance`（done / give_up）
-- **advance** → `init_scene`（还有 scene）或 `concat`（全跑完）
+> 拓扑由 `build_mvp2_graph()` 在运行时生成；下方 mermaid 与 `docs/graphs/mvp2.mmd` 都是从 `get_graph().draw_mermaid()` 落盘的，改图后请重新生成（见文末"怎么交互式看"）。
 
-外加 3 个 **fatal early-exit** edges（`parser` / `summarizer` / `storyboarder` 任一失败直接到 END）。
+### 父图
+
+3 个 fatal early-exit edges（`parser` / `summarizer` / `storyboarder` 任一置 `fatal_error` 直接到 END）；`storyboarder` 成功时一次性 `Send × N` 把 N 个 scene 全发出去。
 
 ```mermaid
 graph TD;
@@ -57,12 +60,9 @@ graph TD;
     parser(parser)
     summarizer(summarizer)
     storyboarder(storyboarder)
-    init_scene(init_scene)
-    coder(coder)
-    render(render)
-    reviewer(reviewer)
-    advance(advance)
+    run_scene(run_scene)
     concat(concat)
+    emb_consolidate(emb_consolidate)
     __end__([__end__]):::last
 
     __start__ --> parser
@@ -71,53 +71,94 @@ graph TD;
     summarizer -. fatal .-> __end__
     summarizer -- next --> storyboarder
     storyboarder -. fatal .-> __end__
-    storyboarder -- next --> init_scene
-
-    init_scene --> coder
-    coder --> render
-    render --> reviewer
-    reviewer -. retry .-> coder
-    reviewer -. advance .-> advance
-    advance -. more scenes .-> init_scene
-    advance -. done .-> concat
-    concat --> __end__
+    storyboarder -. Send x N .-> run_scene
+    run_scene --> concat
+    concat --> emb_consolidate
+    emb_consolidate --> __end__
 
     classDef first fill-opacity:0
     classDef last fill:#bfb6fc
 ```
 
-### 节点契约（state 字段读写）
+### 父图节点契约（PaperState 字段读写）
 
 | 节点 | 输入字段 | 输出字段 | 失败模式 |
 |---|---|---|---|
 | `parser` | `input_kind` / `pdf_path` / `arxiv_spec` / `arxiv_section` | `parsed_markdown` / `parsed_format` / `parser_source` | `fatal_error`（网络 / Marker 失败） |
 | `summarizer` | `parsed_markdown` | `summary` | `fatal_error`（schema drift 重试后仍失败） |
 | `storyboarder` | `summary` 或 `raw_text` | `storyboard` | `fatal_error`（同上） |
-| `init_scene` | `storyboard`, `current_scene_idx` | 重置 `iter_count` / `error_feedback` / `current_code` | `fatal_error`（storyboard 缺失） |
-| `coder` | 当前 scene + `error_feedback`（若上轮失败） | `current_code` | 让下游 render 报 python error |
-| `render` | `current_code`, `quality` | `attempts[].render_result` | 静态检查失败 / subprocess 报错 / 超时 |
-| `reviewer` | 最近一次 `attempts[-1]` | `attempts[-1].reviewer_decision/hint` + `error_feedback` / `iter_count` | 短路成功；硬 cap give_up |
-| `advance` | `attempts[-1].render_result` | `rendered_videos[]` 或 `skipped_scenes[]`；`current_scene_idx += 1` | — |
-| `concat` | `rendered_videos[]` | `final_video_path` | `fatal_error`（无任一成功 scene） |
+| `run_scene` | 子图 payload（一个 scene 的 SceneState） | reduce 进 PaperState：`attempts[]`, `rendered_videos[]`, `skipped_scenes[]`, `visual_revision_decisions[]`, `scene_reports[]` | 子图内 give_up → 进 `skipped_scenes`；不阻塞其它 scene |
+| `concat` | `rendered_videos[]` | `final_video_path` | 无成功 scene → 跳过 concat（不致命） |
+| `emb_consolidate` | `trace.jsonl` + `attempts/` + `emb_*` 配置 | `emb_writes[]`（成功 / 失败记录入库 stats） | `--emb` 关闭时 no-op |
 
-### Reflection loop 的两条 conditional edge
+### 子图（per-scene `scene_graph.SceneState`）
 
-```python
-# paper2manim/graphs/mvp2.py
-def should_retry(state) -> Literal["coder", "advance"]:
-    last = state["attempts"][-1]
-    if last["render_result"]["status"] == "success": return "advance"
-    if state["iter_count"] >= state["max_retries"]:  return "advance"  # give_up
-    if last.get("reviewer_decision") == "give_up":   return "advance"
-    return "coder"                                                     # retry
+每个 `Send` 在自己的 SceneState 实例里跑这张图。两条 conditional edge：
 
-def has_more_scenes(state) -> Literal["init_scene", "concat"]:
-    return "init_scene" if state["current_scene_idx"] < len(state["storyboard"]["scenes"]) else "concat"
+- **reviewer** → `coder`（render 失败且未触 cap）/ `frame_sampler`（render 成功且 `--vlm` 开）/ `end`（give_up 或 vlm 关）
+- **vlm_review** → `visual_revise`（decision=revise）/ `end`（decision=pass 或触 `max_visual_revisions` cap）
+
+```mermaid
+graph TD;
+    __start__([__start__]):::first
+    emb_retrieve(emb_retrieve)
+    coder(coder)
+    render(render)
+    reviewer(reviewer)
+    frame_sampler(frame_sampler)
+    vlm_review(vlm_review)
+    visual_revise(visual_revise)
+    __end__([__end__]):::last
+
+    __start__ --> emb_retrieve
+    emb_retrieve --> coder
+    coder --> render
+    render --> reviewer
+    reviewer -. retry .-> coder
+    reviewer -. frame_sampler .-> frame_sampler
+    reviewer -. end (give_up / vlm off) .-> __end__
+    frame_sampler --> vlm_review
+    vlm_review -. visual_revise .-> visual_revise
+    vlm_review -. end (pass / cap) .-> __end__
+    visual_revise --> render
+
+    classDef first fill-opacity:0
+    classDef last fill:#bfb6fc
 ```
 
-### 一次典型 5-scene 跑批的递归深度上限
+### 子图节点契约（SceneState 字段读写）
 
-`recursion_limit=80`：5 scenes × (init_scene + coder + render + reviewer + advance = 5 节点) × 最多 3 retry ≈ 75 节点访问，加上前置 3 节点（parser/summarizer/storyboarder）+ concat 留余量。
+| 节点 | 输入字段 | 输出字段 | 失败模式 |
+|---|---|---|---|
+| `emb_retrieve` | scene 描述 + `emb_*` 配置 | `retrieved_success[]` / `retrieved_failure[]`（注入 coder prompt 的 Reference Examples / Known Pitfalls） | `--emb` 关闭时 no-op |
+| `coder` | scene + `retrieved_*` + `error_feedback`（上轮失败时） | `current_code` | 让下游 render 报错 |
+| `render` | `current_code`, `quality` | `attempts[].render_result` | 静态预检失败 / subprocess 错 / 超时 |
+| `reviewer` | `attempts[-1]` | `reviewer_decision` / `hint` / `error_feedback`；`iter_count += 1` | 触 `max_retries` cap → give_up |
+| `frame_sampler` | 成功 `rendered_video` | `current_montage_path`（ffmpeg 抽 N 帧 hstack PNG） | 抽帧失败 → 跳过 VLM 直接 END |
+| `vlm_review` | montage + scene 描述 | `last_visual_review`（3 维 × 0–100 + decision + avg）；`visual_revision_decisions[]` | LLM 抛异常 → auto-pass |
+| `visual_revise` | `current_code` + `last_visual_review.revision_instruction` | 新 `current_code`；`vlm_revision_count += 1` | 异常时回退原 code，不中断 |
+
+### 两条 conditional edge 的判定逻辑
+
+```python
+# paper2manim/graphs/scene_graph.py
+def post_reviewer_route(state) -> Literal["coder", "frame_sampler", "end"]:
+    decision = state.get("reviewer_decision")
+    if decision == "retry":                                       return "coder"
+    if decision == "advance" and state.get("vlm_enabled", False): return "frame_sampler"
+    return "end"  # give_up / vlm off / no rendered_video
+
+def post_vlm_route(state) -> Literal["visual_revise", "end"]:
+    review = state.get("last_visual_review") or {}
+    if review.get("decision") == "revise" and \
+       state.get("vlm_revision_count", 0) < state.get("max_visual_revisions", 2):
+        return "visual_revise"
+    return "end"  # pass / cap / fail (soft-fail keeps rendered video)
+```
+
+### Recursion limit
+
+父图扁平（5 个固定节点 + 1 个 Send 步骤），`cli.py` 给父图设 `recursion_limit = 50`。每个 `run_scene` 内部对子图单独设 `max(60, 6 + 3 * (max_retries + 1) + 5 * max_visual_revisions + 4)`（`graphs/mvp2.py:152`）——默认 `max_retries=3` / `max_visual_revisions=2` 时算出 32，被下限 60 覆盖。
 
 ---
 

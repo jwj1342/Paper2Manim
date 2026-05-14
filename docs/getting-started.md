@@ -227,29 +227,87 @@ $EDITOR prompts/coder.md
 paper2manim mvp1 --input examples/mvp1/pythagorean.txt
 ```
 
-### 3.5 进 MVP 2.0：跑一篇 PDF
+### 3.5 进 MVP 2.0：跑一篇真实论文
+
+输入两种来源任选其一：**`--arxiv` 是推荐路径**（直接抓作者上传的 LaTeX 源码，公式 100% 准确、双栏顺序天然正确、无需 3GB Marker 权重）；`--pdf` 是兜底（走 Marker 解析）。
+
+**路径 A：`--arxiv`（推荐）**
+
+不需要装额外依赖：
 
 ```bash
-pip install -e ".[mvp2]"     # 装 marker-pdf；会下载约 3GB 模型权重到 ~/.cache/huggingface（仅首次）
+# 整篇论文
+paper2manim mvp2 --arxiv 1706.03762
+
+# 只跑某一节（按 \section{...} 标题做大小写不敏感子串匹配，强烈推荐先用这个跑通）
+paper2manim mvp2 --arxiv 1706.03762 --section "Background"
+
+# arXiv URL 也接受
+paper2manim mvp2 --arxiv https://arxiv.org/abs/2401.12345v2
 ```
 
-放一篇你想跑的论文 PDF（建议从一个简短的论文开始，例如某篇论文的 abstract + 一两个 section 截出来 < 5 页）：
+作者只上传了 PDF（无 LaTeX 源码）时，会自动回退到 `--pdf` 路径。
+
+**路径 B：`--pdf`（本地 PDF）**
+
+需要先装 Marker：
 
 ```bash
+pip install -e ".[mvp2]"     # 装 marker-pdf；首次会下载 ~3GB 模型权重到 ~/.cache/huggingface
 mkdir -p examples/mvp2
 cp /your/path/some_paper.pdf examples/mvp2/
-
 paper2manim mvp2 --pdf examples/mvp2/some_paper.pdf
 ```
 
-期望流水线：
-1. **Marker** 把 PDF 解析成 markdown（保留公式 LaTeX）
+期望流水线（两条路径合流后一样）：
+
+1. **Parser** 拿到论文文本（arXiv flatten `\input{}` 或 Marker markdown）
 2. **Summarizer** 提取关键贡献 / 公式 / 主概念
 3. **Storyboarder** 拆 2–5 个 scene
-4. **Coder ⇄ Reviewer** 反思闭环：每个 scene 最多重试 `PAPER2MANIM_MAX_RETRIES`（默认 3）次
-5. **Concat** ffmpeg 合并所有成功的 scene 成一个 mp4
+4. 每个 scene 在自己的子图里独立跑：**Coder ⇄ Render ⇄ Reviewer** 文本反思（最多 `PAPER2MANIM_MAX_RETRIES`，默认 3 次）
+5. **Concat** ffmpeg 把成功的 scene 串成最终 mp4
 
-可以用 `--max-retries 5` 给反思更多机会，`--no-render` 只看 LLM 端产物。
+默认所有 scene 串行。要并行加速看 §3.7。
+
+### 3.6 打开 VLM 视觉反思（MVP 3.0 阶段 2/3）
+
+`--vlm` 会在每个 scene 渲染成功后再加一层视觉反思闭环：`frame_sampler` 抽 4 帧拼成 montage → `vlm_review` 按 3 维 × 0-100 打分（`logic_flow` / `layout_occlusion` / `accuracy`，avg ≥ 90 自动 pass）→ `visual_revise` 改代码 → 重渲染。
+
+```bash
+paper2manim mvp2 --arxiv 1706.03762 --section "Background" --vlm
+# 视觉反思每 scene 最多 2 轮，用 --max-visual-revisions N 调
+paper2manim mvp2 --arxiv 1706.03762 --section "Background" --vlm --max-visual-revisions 3
+```
+
+VLM 需要在 `config.yaml` 里配 `supports_vision: true` 的模型（例如 Claude Opus 4.7 / Sonnet 4.6 via Azure，或 GPT-4o）。参考 `config.example.yaml`。
+
+### 3.7 打开 Episodic Memory Bank（MVP 3.0 阶段 4，自进化）
+
+`--emb` 会在每个 scene 写代码前从历史库 RAG 检索 top-k 成功示例 + 失败教训注入 Coder prompt，并在 run 结束时把本次的高分 scene + 失败→成功转化蒸馏回库。第一次跑库是空的、行为等价于关闭；跑多篇之后才显现进化。
+
+```bash
+paper2manim mvp2 --arxiv 1706.03762 --section "Background" --vlm --emb
+# 默认库放在 $PAPER2MANIM_RUNS_DIR/_emb；CI / 离线时加 --emb-fake-embedder 跳过 sentence-transformers
+paper2manim mvp2 --arxiv 1706.03762 --vlm --emb --emb-fake-embedder
+```
+
+### 3.8 并行化（多 scene 并发）
+
+```bash
+# 5 个 scene 同时跑；建议同时给一个 render-concurrency 上限避免 manim 把 CPU 打爆
+paper2manim mvp2 --arxiv 1706.03762 --scene-parallelism 5 --render-concurrency 3
+
+# 共用 LLM API 的全局 RPS 上限（防 429）
+paper2manim mvp2 --arxiv 1706.03762 --scene-parallelism 5 --llm-rps 1.5
+```
+
+默认 `--scene-parallelism 1`（串行，与 PR #19 之前行为零差异）；`--render-concurrency` / `--llm-rps` 默认不限。
+
+### 3.9 其它常用调试 flag
+
+- `--max-retries N`：给文本反思更多 / 更少机会（默认 3）
+- `--no-render`：只跑 LLM 端（parser → summarizer → storyboarder → coder），不调 manim。验证 prompt 时省渲染开销
+- `paper2manim -v mvp2 ...`：DEBUG 日志
 
 ---
 

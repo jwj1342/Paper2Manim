@@ -23,7 +23,7 @@
 - **Python matrix**：3.11 + 3.12 并行
 - **ruff check**：lint，**失败则 PR 红**
 - **ruff format --check**：格式漂移，目前**仅 warning**（`continue-on-error: true`）
-- **pytest -m "not slow"**：跑 mock 测试套件（当前 46 个），**失败则 PR 红**
+- **pytest -m "not slow"**：跑 mock 测试套件（当前 193 个），**失败则 PR 红**
 
 ### 不跑什么
 
