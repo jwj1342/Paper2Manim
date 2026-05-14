@@ -159,17 +159,22 @@ def mvp1(input_arg: str, quality: str | None, no_render: bool, allow_render_on_l
 )
 @click.option(
     "--emb-theta-high",
-    default=4.0,
+    default=85.0,
     type=float,
     show_default=True,
-    help="Success-record acceptance threshold (avg VLM score on the 6-dim 1-5 scale). Lower for bootstrap runs with weak VLM signal.",
+    help="Success-record acceptance threshold on the 0-100 avg VLM score "
+    "(proposal §4.2 3-dim canonical schema). Sits just below the §4.3 "
+    "auto-pass threshold (90), so bypass-passes still land in EMB.success. "
+    "Lower to ~70 during bootstrap when VLM signal is noisy.",
 )
 @click.option(
     "--emb-failure-min-margin",
-    default=0.5,
+    default=5.0,
     type=float,
     show_default=True,
-    help="Minimum (after_score - before_score) for a VLM transition to qualify as a validated failure record. Larger = fewer but cleaner records.",
+    help="Minimum (after_score - before_score) on the 0-100 scale for a VLM "
+    "transition to qualify as a validated failure record. Larger = fewer but "
+    "cleaner records. Set ~0.5 to keep every strict improvement.",
 )
 @click.option(
     "--emb-llm-distill/--no-emb-llm-distill",

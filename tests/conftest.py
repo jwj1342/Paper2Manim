@@ -17,16 +17,42 @@ def _isolated_runs_dir(tmp_path, monkeypatch):
     ``config.yaml`` (used for real experiments) would silently bypass the
     ``MIMO_API_KEY`` injection below and break every test that asserts on the
     fallback path.
+
+    NOTE on the rebind dance: ``paper2manim.config.env.settings`` is a
+    module-level singleton built at first import, and ``paper2manim.artifacts``
+    captures it via ``from paper2manim.config.env import settings``. Just
+    setting ``PAPER2MANIM_RUNS_DIR`` env var here would silently leave
+    ``artifacts.settings.PAPER2MANIM_RUNS_DIR`` pointing at the original
+    project ``runs/`` directory — and trace.jsonl + attempts/* would
+    accumulate across test sessions, contaminating any test that calls
+    ``parse_trace`` (e.g. EMB consolidation tests). We rebind the attribute on
+    every relevant module that already imported it, so ``run_dir()`` writes
+    into ``tmp_path``.
     """
     runs = tmp_path / "runs"
     runs.mkdir()
     monkeypatch.setenv("PAPER2MANIM_RUNS_DIR", str(runs))
     monkeypatch.setenv("MIMO_API_KEY", os.environ.get("MIMO_API_KEY", "tp-test-key"))
-    # Force config reload
-    from paper2manim import config
 
-    config.get_settings.cache_clear()
-    config.settings = config.get_settings()  # type: ignore[attr-defined]
+    from paper2manim.config import env as env_mod
+
+    env_mod.get_settings.cache_clear()
+    fresh = env_mod.get_settings()
+    monkeypatch.setattr(env_mod, "settings", fresh)
+    # Re-bind the captured-at-import-time references in every module that did
+    # ``from paper2manim.config.env import settings``. Add new modules to this
+    # list if they ever fail to see the tmp dir.
+    for mod_path in (
+        "paper2manim.artifacts",
+        "paper2manim.cli",
+    ):
+        import importlib
+        try:
+            mod = importlib.import_module(mod_path)
+        except Exception:  # noqa: BLE001 — module may not yet be importable in some test
+            continue
+        if hasattr(mod, "settings"):
+            monkeypatch.setattr(mod, "settings", fresh)
 
     # Drop yaml-cache and steer the loader at a non-existent path so tests
     # always exercise the env-mimo fallback regardless of whether the dev has
@@ -37,9 +63,9 @@ def _isolated_runs_dir(tmp_path, monkeypatch):
     llm_mod.reload_config()
 
     yield runs
-    # Restore module-level settings after test
-    config.get_settings.cache_clear()
-    config.settings = config.get_settings()  # type: ignore[attr-defined]
+    # monkeypatch teardown automatically reverts settings rebinds; we just need
+    # to clear lru_cache so the next test gets a fresh build.
+    env_mod.get_settings.cache_clear()
     llm_mod.reload_config()
 
 

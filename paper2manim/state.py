@@ -132,8 +132,11 @@ class PaperState(TypedDict, total=False):
     # directly and skip the path-based cache.
     emb_enabled: bool
     emb_store_path: str | None
-    emb_theta_high: float  # success-record acceptance threshold (avg score)
-    emb_failure_min_margin: float  # min (after-before) score gap for a failure record
+    # Both thresholds live on the proposal §4.2 0-100 schema. CLI defaults are
+    # 85.0 / 5.0 (see paper2manim.cli mvp2). DO NOT default these to old 1-5
+    # values when synthesizing test states — the production gate would never fire.
+    emb_theta_high: float  # success-record acceptance threshold (0-100 avg score)
+    emb_failure_min_margin: float  # min (after-before) gap for a failure record
     emb_use_llm_distillers: bool  # if True, rationale_writer + lesson_distiller call the LLM
     emb_use_faiss: bool
     emb_use_real_embedder: bool

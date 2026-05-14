@@ -247,8 +247,12 @@ def emb_consolidate_node(state: PaperState) -> dict[str, Any]:
 
         rw = write_rationale_llm
         ld = distill_lesson_llm
-    theta = float(state.get("emb_theta_high", 4.0))
-    fail_margin = float(state.get("emb_failure_min_margin", 0.5))
+    # Defaults match emb/distill.py on the proposal §4.2 0–100 schema; CLI
+    # `--emb-theta-high` / `--emb-failure-min-margin` should already be in this
+    # range, but a stale state dict (older test fixture, hand-built invocation)
+    # falls back to these.
+    theta = float(state.get("emb_theta_high", 85.0))
+    fail_margin = float(state.get("emb_failure_min_margin", 5.0))
     try:
         report = consolidate_run(
             run_id,

@@ -194,7 +194,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--vlm", action="store_true")
     parser.add_argument("--max-visual-revisions", type=int, default=2)
     parser.add_argument("--emb-store-path", default=None)
-    parser.add_argument("--emb-theta-high", type=float, default=4.0)
+    parser.add_argument("--emb-theta-high", type=float, default=85.0,
+                        help="0-100 scale; matches paper2manim mvp2 default.")
     parser.add_argument("--emb-llm-distill", action="store_true")
     parser.add_argument("--emb-fake-embedder", action="store_true")
     parser.add_argument(

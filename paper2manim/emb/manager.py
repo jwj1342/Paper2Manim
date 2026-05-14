@@ -95,6 +95,7 @@ class EpisodicMemoryBank:
         # Hydrate indices from store on first construction. Faiss / InMemory
         # indices both support add() so this is uniform across impls.
         self._rebuild_indices_from_store()
+        self._warn_on_score_schema_drift()
 
     # ---- internals ----
 
@@ -111,6 +112,34 @@ class EpisodicMemoryBank:
         except Exception as exc:  # noqa: BLE001 — wrap upstream into our taxonomy
             raise EmbedderError(f"encode failed: {type(exc).__name__}: {exc}") from exc
         return ctx.model_copy(update={"task_embedding": vec})
+
+    def _warn_on_score_schema_drift(self) -> None:
+        """Spot-check stored success records for the legacy 1-5 score scale.
+
+        The proposal §4.2 schema is 0-100. Records with ``vlm_score`` strictly
+        between 0 and 5 strongly suggest data written under the old schema (or
+        bypassed the gate via ``theta_high<=0``). We don't migrate — we just
+        log a single warning so retrieval / consolidate behavior on a mixed
+        store is at least observable.
+        """
+        try:
+            recs = self._store.all(polarity="success")
+        except Exception:  # noqa: BLE001
+            return
+        legacy = sum(
+            1
+            for r in recs
+            if r.provenance.vlm_score is not None and 0 < r.provenance.vlm_score < 5
+        )
+        if legacy:
+            log.warning(
+                "[emb] score schema drift suspected: %d/%d success records have "
+                "vlm_score in (0, 5) — likely written under old 1-5 schema. "
+                "New code uses 0-100; these will sort low and rarely be retrieved. "
+                "Consider `paper2manim emb prune` once available, or rebuild the EMB.",
+                legacy,
+                len(recs),
+            )
 
     def _rebuild_indices_from_store(self) -> None:
         # Cheap on EMB load (≤ 1K records expected); fast path for prod is
