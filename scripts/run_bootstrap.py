@@ -58,6 +58,19 @@ class TaskSpec:
         return cls(arxiv_id=a, section=s or None)
 
 
+_RUN_ID_RE = __import__("re").compile(r"^RUN_ID=([\w\-]+)\s*$", __import__("re").MULTILINE)
+
+
+def parse_run_id(stdout: str) -> str | None:
+    """Extract ``run_id`` from the ``RUN_ID=<id>`` marker line emitted by
+    ``paper2manim mvp1`` / ``mvp2``. Returns ``None`` if not found (e.g.,
+    when the CLI exited before the marker, or this is a pre-marker version)."""
+    if not stdout:
+        return None
+    m = _RUN_ID_RE.search(stdout)
+    return m.group(1) if m else None
+
+
 @dataclass
 class TaskOutcome:
     arxiv_id: str
@@ -65,6 +78,7 @@ class TaskOutcome:
     exit_code: int
     duration_s: float
     stdout_tail: str
+    run_id: str | None = None  # extracted from RUN_ID=... marker; None if absent
     error: str | None = None
 
 
@@ -87,6 +101,7 @@ class BootstrapReport:
                     "section": t.section,
                     "ok": t.exit_code == 0,
                     "duration_s": round(t.duration_s, 1),
+                    "run_id": t.run_id,
                 }
                 for t in self.tasks
             ],
@@ -175,6 +190,7 @@ def run_one(task: TaskSpec, args: argparse.Namespace) -> TaskOutcome:
         exit_code=int(result.exit_code),
         duration_s=duration,
         stdout_tail=tail,
+        run_id=parse_run_id(result.output or ""),
         error=err,
     )
 
