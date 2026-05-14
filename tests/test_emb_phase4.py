@@ -21,7 +21,7 @@ from paper2manim.emb import (
     SuccessBody,
 )
 from paper2manim.emb.manager import build_in_memory_emb
-from paper2manim.graphs.mvp2 import _reset_emb_cache
+from paper2manim.graphs.scene_graph import _reset_emb_cache
 from paper2manim.schemas import StoryboardModel, SummaryModel
 
 # --------------------------------------------------------------------------- #
@@ -117,7 +117,7 @@ def emb_pipeline(monkeypatch, tmp_path):
             "workdir": str(workdir),
         }
 
-    monkeypatch.setattr("paper2manim.graphs.mvp2.render", fake_render)
+    monkeypatch.setattr("paper2manim.graphs.scene_graph.render", fake_render)
 
     def fake_sample(video_path, out_png, **kw):
         out = Path(out_png)
@@ -125,7 +125,7 @@ def emb_pipeline(monkeypatch, tmp_path):
         out.write_bytes(b"\x89PNG\r\n\x1a\n")
         return out
 
-    monkeypatch.setattr("paper2manim.graphs.mvp2.sample_frames_montage", fake_sample)
+    monkeypatch.setattr("paper2manim.graphs.scene_graph.sample_frames_montage", fake_sample)
 
     def fake_concat(paths, out):
         out = Path(out)
@@ -406,9 +406,9 @@ class TestEMBConsolidation:
                 "raw_response": "",
             }
 
-        monkeypatch.setattr("paper2manim.graphs.mvp2.review_scene", review_alternating)
+        monkeypatch.setattr("paper2manim.graphs.scene_graph.review_scene", review_alternating)
         monkeypatch.setattr(
-            "paper2manim.graphs.mvp2.revise_code",
+            "paper2manim.graphs.scene_graph.revise_code",
             lambda *a, **kw: (
                 "from manim import *\nclass Scene1(Scene):\n"
                 "    def construct(self):\n        self.wait(0.2)  # revised\n"

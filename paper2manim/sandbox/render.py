@@ -10,6 +10,7 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
+from paper2manim import concurrency
 from paper2manim.quality.manim_static_checker import validate_manim_code
 from paper2manim.sandbox.classify import (
     classify_error,
@@ -103,24 +104,27 @@ def render(
             pass
 
     timed_out = False
-    try:
-        proc = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=wall_timeout,
-            preexec_fn=_limits,
-            cwd=work,
-            env=env,
-            check=False,
-        )
-        stderr = proc.stderr
-        returncode = proc.returncode
-    except subprocess.TimeoutExpired as e:
-        timed_out = True
-        stderr = e.stderr.decode() if isinstance(e.stderr, bytes) else (e.stderr or "")
-        stderr = stderr + "\n[TIMEOUT]"
-        returncode = -1
+    # Acquire a render slot. Under --scene-parallelism > 1, this caps the
+    # number of concurrent Manim subprocesses; in serial mode it's a no-op.
+    with concurrency.render_slot():
+        try:
+            proc = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=wall_timeout,
+                preexec_fn=_limits,
+                cwd=work,
+                env=env,
+                check=False,
+            )
+            stderr = proc.stderr
+            returncode = proc.returncode
+        except subprocess.TimeoutExpired as e:
+            timed_out = True
+            stderr = e.stderr.decode() if isinstance(e.stderr, bytes) else (e.stderr or "")
+            stderr = stderr + "\n[TIMEOUT]"
+            returncode = -1
 
     if not timed_out and returncode == 0:
         mp4 = _find_output_mp4(out_dir, scene_name)

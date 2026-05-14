@@ -9,10 +9,12 @@
 | 阶段 | 状态 | 输入 | 处理 | 输出 | 核心研究主张 |
 |---|---|---|---|---|---|
 | **MVP 1.0** | 已验证 | 短文本（摘要 / 单定理） | Storyboarder → Coder → Render | 15–30 秒视频 | 验证最短端到端链路可行 |
-| **MVP 2.0** | 进行中 | 完整 PDF | Parser(Marker) → Summarizer → Storyboarder → Coder ⇄ Reviewer 反思闭环 → Concat | 1–2 分钟多场景视频 | 反思机制对 Pass@1 的提升 |
-| MVP 3.0 | 计划中 | 教学任务 + 检索到的历史经验 | + VLM-as-Judge 视觉打分 + Episodic Memory Bank 沉淀 + RAG 冷启动 | 持续进化的多场景视频 | **自进化机制 + 跨域记忆迁移**（详见提案 §4） |
+| **MVP 2.0** | 已验证 | arXiv 源码 / PDF | Parser(arXiv 源码 / Marker) → Summarizer → Storyboarder → Coder ⇄ Reviewer 反思闭环 → Concat | 1–2 分钟多场景视频 | 反思机制对 Pass@1 的提升 |
+| **MVP 3.0 阶段 2/3** | 已验证 | + 渲染帧 | + Frame Sampler → VLM Multi-Dim Review (3 维 × 0-100) → Visual Revise | 视觉迭代后的多场景视频 | VLM-as-Judge 真能驱动 reflection |
+| **MVP 3.0 阶段 4** | 后端就绪 | + 历史 EMB | + 双通道 Episodic Memory Bank（success + failure）+ per-scene RAG 注入 + 蒸馏沉淀 | 跨论文进化的多场景视频 | **自进化 + 跨域记忆迁移**（详见提案 §4） |
+| **图计算并行化** | 已落地 | — | `fan_out_scenes` 发 N 个 `Send` → 每个 scene 在自己的 sub-graph 独立跑 | — | 把 "Pass@1 → Hero Plot" 实验循环从天级压到小时级 |
 
-**当前状态**：MVP 1.0 端到端已验证（LLM 生成代码 + 沙盒渲染均成功）。MVP 2.0 的全部 agents、graph 拓扑、反思 conditional edge 已实现并通过单测，待真实论文跑通验收。MVP 3.0 的 VLM Critic 与 visual revision 智能体脚手架已合入（见 `paper2manim/infrastructure/vlm/` 与 `paper2manim/agents/vlm_scene_reviewer.py`），尚未接入 `graphs/mvp2.py`，留待 issue #1 的 D2 / D5 讨论收敛后落地。详细进度与 To Do 清单见 [`docs/progress.md`](./docs/progress.md)。
+**当前状态**：MVP 1.0 / 2.0 / 3.0 阶段 2/3 端到端均已验证。阶段 4 EMB 后端（双通道 schema + SQLite store + Faiss 检索 + 蒸馏 + RAG 注入）整套落地，CLI `--emb` 开启；剩余 cold-record pruning 与 RAG 注入位置 A/B 见 [#17](https://github.com/jwj1342/Paper2Manim/issues/17) / [#18](https://github.com/jwj1342/Paper2Manim/issues/18)。图计算并行化已就位，默认串行行为零差异；用 `--scene-parallelism N` 显式打开。详细进度与 To Do 清单见 [`docs/progress.md`](./docs/progress.md)。
 
 > **新协作者请直接阅读 [`docs/getting-started.md`](./docs/getting-started.md)**——一份在普通笔记本 / 服务器上从零跑通的详尽入门指南，含三大平台依赖、API key 申请、第一个 demo、看视频、改 prompt、常见报错排查。
 
@@ -227,8 +229,10 @@ Paper2Manim/
 │   │   ├── coder.py               scene + error_feedback → Manim 代码（MVP 1.0）
 │   │   ├── summarizer.py          markdown → 关键贡献 / 公式 / 概念（MVP 2.0）
 │   │   ├── reviewer.py            RenderResult → retry / give_up + hint（MVP 2.0）
-│   │   ├── vlm_scene_reviewer.py  渲染帧 → VisualReviewResult（MVP 3.0 脚手架，未接图）
-│   │   └── visual_revision_agent.py  失败的 VisualReview → 修订后代码（MVP 3.0 脚手架）
+│   │   ├── vlm_scene_reviewer.py  渲染帧 → VisualReviewResult（MVP 3.0 阶段 2，已接入 scene 子图）
+│   │   ├── visual_revision_agent.py  失败的 VisualReview → 修订后代码（MVP 3.0 阶段 3）
+│   │   ├── rationale_writer.py    成功 scene → "为什么这是个好视频" rationale（MVP 3.0 阶段 4）
+│   │   └── lesson_distiller.py    VLM transition → 结构化失败 lesson（MVP 3.0 阶段 4）
 │   │
 │   ├── parsers/                 ← 输入解析器
 │   │   ├── __init__.py            分派器：parse_arxiv / parse_local_pdf；ParsedInput 命名元组
@@ -248,8 +252,21 @@ Paper2Manim/
 │   │
 │   ├── graphs/                  ← LangGraph 工作流定义
 │   │   ├── mvp1.py                线性拓扑：storyboarder → coder → render → END
-│   │   └── mvp2.py                含反思 conditional edge 的多 scene 拓扑
-│   │                              （reviewer 后分流：retry → coder | advance → next scene）
+│   │   ├── mvp2.py                父图：parser → summarizer → storyboarder → fan_out_scenes
+│   │   │                          → [Send×N → run_scene] → concat → emb_consolidate
+│   │   └── scene_graph.py         per-scene 子图：emb_retrieve → coder ⇄ reviewer/render
+│   │                              → frame_sampler → vlm_review ⇄ visual_revise（mvp2 fan-out 用）
+│   │
+│   ├── concurrency.py            ← 进程级 throttle：RENDER_SEMAPHORE + LLM TokenBucket
+│   │                              （`render_slot()` 包 manim 子进程，RateLimitedLLM 代理 LLM）
+│   │
+│   ├── emb/                      ← Episodic Memory Bank（MVP 3.0 阶段 4 后端）
+│   │   ├── schema.py              双通道 Pydantic v2 schema：success body + failure body
+│   │   ├── store.py               SQLite store + provenance-keyed dedup
+│   │   ├── index/                 Faiss + in-memory fallback；sentence-transformers + HashEmbedder
+│   │   ├── manager.py             EpisodicMemoryBank facade（query / add / stats / delete）
+│   │   ├── distill.py             consolidate_run：trace → 蒸馏 records 入库
+│   │   ├── retrieval.py           retrieve_for_scene：scene → top-k success / failure 注入
 │   │
 │   ├── schemas/                 ← Pydantic 数据契约
 │   │   ├── storyboard.py          SceneModel / StoryboardModel（PascalCase 校验）
@@ -263,7 +280,7 @@ Paper2Manim/
 │   ├── infrastructure/          ← 多 provider 抽象层（合作者）
 │   │   ├── models/                openai_compatible / mock 模型客户端 + factory + registry
 │   │   ├── llm/                   LLMClient（基于 models/ 的高层包装）
-│   │   ├── vlm/                   VLMClient Protocol + Doubao（豆包）+ Mock 实现
+│   │   ├── vlm/                   VLMClient Protocol + openai_compatible + anthropic + mock
 │   │   └── rendering/             另一份 manim 渲染器（与 sandbox/render.py 并存）
 │   │
 │   └── utils/                   ← 通用工具
@@ -282,7 +299,7 @@ Paper2Manim/
 │
 ├── config.example.yaml        ← AppSettings YAML 模板（多 provider 模型注册表）
 │
-├── tests/                     ← pytest 测试套件（46/46 通过）
+├── tests/                     ← pytest 测试套件（189/189 通过）
 │   ├── conftest.py              共享 fixtures（隔离 runs 目录、mock LLM）
 │   ├── test_classify.py         错误分类用例 + 静态检查器集成（D1/D4）
 │   ├── test_llm_client.py       MiMo client 边界条件（key 缺失、未知 alias）

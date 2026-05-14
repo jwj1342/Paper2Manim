@@ -1,8 +1,8 @@
 # Progress
 
-> 更新时间：2026-05-13（VLM 评分 schema 收敛 3 维 × 0-100 + avg≥90 auto-pass bypass；issue #12 / #13 一并清；测试基线 65/65）
+> 更新时间：2026-05-13（图执行从串行改并行——`fan_out_scenes` Send×N + render/LLM throttles；测试基线 189/189）
 >
-> 历史里程碑：MVP 2.0 真实论文验收 → YAML 多 provider + 多模态标识 → MVP 3.0 阶段 2/3 VLM 接图 + 实验数据（见 `docs/vlm_experiment.md`）→ proposal §4.2 canonical schema 落地。
+> 历史里程碑：MVP 2.0 真实论文验收 → YAML 多 provider + 多模态标识 → MVP 3.0 阶段 2/3 VLM 接图（`docs/vlm_experiment.md`）→ proposal §4.2 canonical schema 落地 → 阶段 4 EMB 后端落地（双通道 success/failure + RAG 注入 + 蒸馏）→ 图并行计算。
 
 ## 总览
 
@@ -14,17 +14,19 @@
 | MVP 1.0 agents（storyboarder, coder） | 完成 | 端到端验证通过 |
 | MVP 2.0 agents（summarizer, reviewer） | 完成 | 反思 cycle 单测 + 真实论文端到端验收均通过 |
 | MVP 3.0 阶段 2/3（VLM 多维评分接图） | 完成 | `agents/vlm_scene_reviewer` + `visual_revision_agent` + `utils/frame_sampler` 已接入 `graphs/mvp2.py`；CLI `--vlm` 开启；评分 schema = proposal §4.2 canonical 3 维 × 0-100（logic_flow / layout_occlusion / accuracy）+ avg≥90 auto-pass bypass；mock-VLM 闭环单测 8 条 + JSON 解析单测 10 条；真实实验数据见 `docs/vlm_experiment.md` |
-| MVP 3.0 阶段 4（EMB / 自进化） | 未启动 | 暂不考虑；保留 proposal §4 + §7 的描述作为未来工作锚点 |
-| Graphs（mvp1, mvp2） | 完成 | mvp2 新增 `frame_sampler → vlm_review → visual_revise` 闭环（cap=`max_visual_revisions`） |
+| MVP 3.0 阶段 4（EMB / 自进化）后端 | 完成 | `paper2manim/emb/`：dual-channel schema（success / failure 各自 body 共享 context+provenance 头）+ SQLite store（provenance-keyed dedup）+ Faiss / in-memory index + sentence-transformers / HashEmbedder + `EpisodicMemoryBank` facade + `distill.consolidate_run` + `retrieval.retrieve_for_scene`；CLI `--emb` 开启 |
+| 图计算并行化 | 完成 | `graphs/scene_graph.py` 新建 per-scene 子图（`SceneState` TypedDict + emb_retrieve / coder / render / reviewer / frame_sampler / vlm_review / visual_revise 完整闭环）；父图 `mvp2.py` 改 `fan_out_scenes` 发 N 个 `Send`，N 个 scene 并发跑；`concurrency.py` 提供 `RENDER_SEMAPHORE` + LLM `TokenBucket`；CLI `--scene-parallelism` / `--render-concurrency` / `--llm-rps`；默认全关 = 串行 = 行为零差异 |
+| Graphs（mvp1, mvp2） | 完成 | mvp1 保留串行；mvp2 改 fan-out（`parser → summarizer → storyboarder → Send×N run_scene → concat → emb_consolidate`），per-scene 包含完整反思 + VLM + EMB 检索闭环 |
 | Prompts | 完成 | 外置在 `prompts/*.md`，含 `vlm_scene_reviewer.md` + `visual_revision_agent.md` + `global_system.md` |
 | 多 provider + 多模态标识（YAML） | 完成 | `config.example.yaml` 模板（所有字段留空 + `$ENV_VAR` 引用）；`ModelConfig.supports_vision` / `auth_style` / `omit_temperature` 字段；`get_llm(role)` + `get_vlm()` 双入口；`provider` ∈ {openai_compatible, anthropic}，anthropic 支持 bearer auth（Azure Claude）；canonical roles ＝ {global_reader, scene_planner, scene_coder, render_fixer, final_summarizer, visual_reviser, vision_checker}，legacy alias（flash/pro/v2/v2-omni）继续可用 |
-| 测试 | 完成 | **65/65** 单测全绿（pytest -q）；详细分解见 `Done › Tests` 段 |
+| 测试 | 完成 | **189/189** 单测全绿（pytest -q）；含 `test_concurrency`（24）+ `test_llm_proxy`（13）+ `test_artifacts_concurrency`（4）+ `test_scene_graph`（17）+ EMB 套件 + 既有 VLM/parser/graph 测试 |
 | 输入解析（arXiv 源码 + 本地 PDF 兜底） | 完成 | `parsers/arxiv_source.py` + 分派 `parsers/__init__.py`；18 条新单测；SourceUnavailable 自动回退 Marker |
 | CI/CD（GitHub Actions） | 完成 | `.github/workflows/ci.yml`（pytest + ruff, py3.11/3.12 matrix）+ `codeql.yml`（每周 + 每次 PR） |
 | 分支保护 + Dependabot | 完成 | main 强制 PR + 3 个 check 必过 + 禁 force push；Dependabot 周更 pip / 月更 actions |
 | 端到端验收（MVP 1.0） | 完成 | pythagorean 输入 → 10.47s mp4（`runs/20260510-080654-3a1159/`，磁盘保留） |
 | 端到端验收（MVP 2.0） | 完成 | arXiv `1706.03762 §Background` → 5 scenes 全成功 → concat 79.0s mp4（`runs/20260512-213215-4d4572/`，runs/ 已 gitignore，本地未保留） |
 | 端到端验收（MVP 3.0 阶段 2/3） | 完成 | 同一输入 + `--vlm` → 5 scenes × 3 reviews（含 2 visual revisions）→ concat 69.1s mp4（`runs/20260512-221822-08f182/`，runs/ 已 gitignore，本地未保留）；评分趋势见 `docs/vlm_experiment.md`；Claude Opus 4.7 复跑同输入 → 84.4s mp4，0 fatal_error |
+| 端到端验收（图并行） | 进行中 | `--scene-parallelism>1` + `--llm-rps` + `--render-concurrency` 已可端到端运行；并发等价性、scene 失败隔离、render semaphore enforcement 在单测层全覆盖；并行下相对串行的实际端到端时延加速比待补一组对照实验 |
 
 ---
 
@@ -175,11 +177,44 @@
 - `tests/` 总数：**46 → 59**（+5 vlm_response_parse, +3 mvp2_vlm robustness, +1 malformed config, +4 重组 llm_client）
 - `config.yaml` 现在是 YAML 路由的**唯一入口**，存在即必须可解析；不存在则走纯 env-MiMo 路径
 
+### PR #16 — MVP 3.0 阶段 4 EMB 后端 land
+
+proposal §4.4 描述的双通道 Episodic Memory Bank 后端整套落地：
+
+- **`paper2manim/emb/schema.py`** — Pydantic v2 dual-body schema：success/failure 共享 `(context, provenance)` 头，body 按 polarity 分（`SuccessBody` 含 rationale + final_code；`FailureBody` 含 lesson + anti-/good-example pair + score delta）
+- **`paper2manim/emb/store.py`** — SQLite store，provenance-keyed dedup（`source_paper + source_section + scene_id + transition_ordinal`）防止重复跑同一 section 时 EMB 单调膨胀
+- **`paper2manim/emb/index/`** — Faiss-or-fallback in-memory；sentence-transformers `all-MiniLM-L6-v2` + HashEmbedder 兜底（首次启动 / CI / 无网络场景）
+- **`paper2manim/emb/manager.py`** — `EpisodicMemoryBank` facade：`add_success / add_failure / query` 加 `hit_count` / `last_used` / `first_seen` provenance 字段（issue #17 cold-record pruning 即基于此）
+- **`paper2manim/emb/distill.py`** — `consolidate_run`：扫一次 `trace.jsonl` + `attempts/`，按 `theta_high`（默认 4.0）筛 success records、按 `failure_min_margin`（默认 0.5）筛 failure transitions，调用注入的 `rationale_writer` / `lesson_distiller`（LLM 或 mock）写 body
+- **`paper2manim/emb/retrieval.py`** — `retrieve_for_scene`：scene 描述向量 → top-k success + top-k failure → `to_state_dict()` 输出 wire-format
+- **`graphs/mvp2.py`** — `emb_retrieve` 节点（先 per-scene，PR #19 后下放到 scene 子图）+ `emb_consolidate` 节点（父图末端）
+- **`agents/coder.py`** — `## Reference Examples` / `## Known Pitfalls` 注入位置（夹在 `## Project conventions` 与 `## Previous attempt failed` 之间）
+- **CLI** — `--emb` / `--emb-store-path` / `--emb-theta-high` / `--emb-failure-min-margin` / `--emb-use-llm-distillers`
+
+未做、open issue 跟进：
+- [#17 §9 Cold record pruning by hit_count / last_used](https://github.com/jwj1342/Paper2Manim/issues/17)
+- [#18 [EMB] A/B protocol for RAG injection position in Coder prompt](https://github.com/jwj1342/Paper2Manim/issues/18)
+
+### PR #19 — 图执行从串行改并行
+
+把 MVP 2.0 per-scene 循环抽到 compiled sub-StateGraph，父图通过 `langgraph.types.Send` fan-out N 个 scene 同时跑：
+
+- **`paper2manim/graphs/scene_graph.py`**（新）— `SceneState` TypedDict + 完整 per-scene 闭环（`emb_retrieve` → `coder` ↔ `render` ↔ `reviewer` → `frame_sampler` → `vlm_review` ↔ `visual_revise`）
+- **`paper2manim/graphs/mvp2.py`**（重写）— `parser → summarizer → storyboarder → fan_out_scenes → [Send×N → run_scene] → concat → emb_consolidate`。删 `init_scene_node` / `advance_scene_node`，初始化挪到 `_make_scene_payload`，成功视频汇总挪到 `run_scene_node` 的 SceneState→PaperState reducer
+- **`paper2manim/concurrency.py`**（新）— `RENDER_SEMAPHORE`（限并发 Manim 子进程）+ `TokenBucket`（限 LLM RPS）；两者都是 module-global，`None` 时纯 passthrough 零开销
+- **`paper2manim/sandbox/render.py`** + **`paper2manim/llm.py`** — `render()` 调 `render_slot()`；`get_llm` / `get_vlm` 包成 `RateLimitedLLM` 透明代理（gated 在 `invoke / ainvoke / stream / batch / with_structured_output / __or__ / bind_tools`）
+- **`paper2manim/artifacts.py`** — `append_trace` 加 `threading.Lock`，并发写 `trace.jsonl` 不交错
+- **`paper2manim/state.py`** — 加 `scene_reports` reducer；`vlm_revision_count` / `last_visual_review` / `current_montage_path` 这三个变量保留在 PaperState 是给 mvp1 串行路径，mvp2 fan-out 不再读写它们（迁到 SceneState）
+- **CLI** — `--scene-parallelism` / `--render-concurrency` / `--llm-rps`，**默认全关 = 串行 = 行为零差异**
+- **Tests** — `test_concurrency` / `test_llm_proxy` / `test_artifacts_concurrency` / `test_scene_graph` 共 35 条新增
+
+Schema 收敛：`visual_revision_decisions` 从 `list[str]` 改成 PR #15 的 `list[dict[str, str]]`，scene 子图同步 emit 新形态。
+
 ---
 
 ## In Progress
 
-（无 — MVP 2.0 真实论文验收完成；MVP 3.0 阶段 2/3 VLM 接图完成；阶段 4 EMB 暂不启动。）
+- **图并行的端到端时延加速比**：单测层等价性已覆盖；真实多 scene 论文下 `--scene-parallelism={1,3,5}` × `--llm-rps={off,1,3}` 的对照实验待补，写到 `docs/parallelism_experiment.md`
 
 ---
 
