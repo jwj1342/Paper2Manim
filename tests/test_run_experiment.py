@@ -255,3 +255,201 @@ class TestMainDryRun:
         manifest = json.loads((out_dir / "manifest.json").read_text())
         assert manifest["tasks"][0]["domain"] == "cs"
         assert manifest["runs"][0]["domain"] == "cs"
+
+
+# --------------------------------------------------------------------------- #
+# _invoke_one: subprocess plumbing
+# --------------------------------------------------------------------------- #
+
+
+class TestInvokeOneSubprocess:
+    """Real (non-dry) ``_invoke_one`` shells out via ``python -m paper2manim``.
+
+    These tests exercise the subprocess-shaped contract via a fake ``runner``
+    callable so they stay fast and don't actually fork.
+    """
+
+    def _fake_completed(self, *, returncode=0, stdout="", stderr=""):
+        import subprocess
+        return subprocess.CompletedProcess(
+            args=[], returncode=returncode, stdout=stdout, stderr=stderr,
+        )
+
+    def test_invokes_python_dash_m_paper2manim(self, re_mod):
+        captured: dict = {}
+
+        def fake_runner(cmd, **kwargs):
+            captured["cmd"] = cmd
+            captured["kwargs"] = kwargs
+            return self._fake_completed(stdout="RUN_ID=fake-1\n")
+
+        exit_code, output, err = re_mod._invoke_one(
+            ["mvp2", "--arxiv", "1706.03762"],
+            dry_run=False, runner=fake_runner,
+        )
+        assert exit_code == 0
+        assert "RUN_ID=fake-1" in output
+        assert err is None
+        # Subprocess form: [python, -m, paper2manim, ...cli_args]
+        assert captured["cmd"][1:3] == ["-m", "paper2manim"]
+        assert captured["cmd"][3:] == ["mvp2", "--arxiv", "1706.03762"]
+        assert captured["kwargs"]["capture_output"] is True
+        assert captured["kwargs"]["text"] is True
+
+    def test_timeout_returns_124_with_partial_stdout(self, re_mod):
+        import subprocess
+
+        def fake_runner(cmd, **kwargs):
+            raise subprocess.TimeoutExpired(
+                cmd=cmd, timeout=5.0, output="RUN_ID=part-1\nstart...\n",
+            )
+
+        exit_code, output, err = re_mod._invoke_one(
+            ["mvp2", "--arxiv", "x"],
+            dry_run=False, timeout_s=5.0, runner=fake_runner,
+        )
+        assert exit_code == 124, "should mirror GNU timeout's exit code"
+        assert "RUN_ID=part-1" in output, "partial stdout must survive timeout"
+        assert "timeout after 5.0s" in (err or "")
+
+    def test_timeout_with_bytes_stdout_decodes(self, re_mod):
+        """Some Python versions hand back bytes in TimeoutExpired.stdout when
+        ``text=True`` is bypassed by an early kill; we should not crash."""
+        import subprocess
+
+        def fake_runner(cmd, **kwargs):
+            raise subprocess.TimeoutExpired(
+                cmd=cmd, timeout=1.0, output=b"RUN_ID=b\xc3\xa9\n",
+            )
+
+        exit_code, output, err = re_mod._invoke_one(
+            ["mvp2", "--arxiv", "x"],
+            dry_run=False, timeout_s=1.0, runner=fake_runner,
+        )
+        assert exit_code == 124
+        # Latin-1-ish bytes round-tripped without ascii decode error
+        assert "RUN_ID=b" in output
+
+    def test_executable_not_found_returns_127(self, re_mod):
+        def fake_runner(cmd, **kwargs):
+            raise FileNotFoundError(2, "No such file or directory", cmd[0])
+
+        exit_code, _, err = re_mod._invoke_one(
+            ["mvp2"], dry_run=False, runner=fake_runner,
+        )
+        assert exit_code == 127
+        assert "executable not found" in (err or "")
+
+    def test_unexpected_runner_exception_returns_2(self, re_mod):
+        def fake_runner(cmd, **kwargs):
+            raise RuntimeError("disk full")
+
+        exit_code, _, err = re_mod._invoke_one(
+            ["mvp2"], dry_run=False, runner=fake_runner,
+        )
+        assert exit_code == 2
+        assert "RuntimeError" in (err or "")
+
+    def test_nonzero_exit_captures_stderr_tail_in_err(self, re_mod):
+        def fake_runner(cmd, **kwargs):
+            return self._fake_completed(
+                returncode=1,
+                stdout="RUN_ID=t-2\n",
+                stderr="Traceback (most recent call last):\n... RuntimeError: synthetic\n",
+            )
+
+        exit_code, output, err = re_mod._invoke_one(
+            ["mvp2"], dry_run=False, runner=fake_runner,
+        )
+        assert exit_code == 1
+        assert "RUN_ID=t-2" in output
+        assert err is not None and "exit 1" in err
+        assert "synthetic" in err, (
+            "stderr tail should be captured into err so the manifest carries "
+            "actionable diagnostics, not just an exit code"
+        )
+
+    def test_run_one_threads_per_task_timeout(self, re_mod, monkeypatch):
+        """Plumbing: ``per_task_timeout`` from args reaches ``_invoke_one``."""
+        import argparse
+
+        captured: dict = {}
+
+        def fake_invoke(cli_args, *, dry_run, timeout_s=None, **_):
+            captured["timeout_s"] = timeout_s
+            captured["dry_run"] = dry_run
+            return 0, "RUN_ID=plumb-1\n", None
+
+        monkeypatch.setattr(re_mod, "_invoke_one", fake_invoke)
+
+        ns = argparse.Namespace(
+            quality="l", max_retries=2, no_render=True,
+            allow_render_on_login=False, max_visual_revisions=2,
+            emb_store_base=None, emb_theta_high=None,
+            emb_failure_min_margin=None, emb_fake_embedder=False,
+            dry_run=False, per_task_timeout=600.0,
+        )
+        outcome = re_mod.run_one(
+            "A", 1, 0, re_mod.TaskSpec(arxiv_id="1706.03762"), ns,
+        )
+        assert outcome.exit_code == 0
+        assert captured["timeout_s"] == 600.0
+        assert captured["dry_run"] is False
+
+    def test_run_one_default_no_timeout_when_arg_missing(self, re_mod, monkeypatch):
+        """Backwards-compat: a Namespace without ``per_task_timeout`` (older
+        callers) must not crash; ``_invoke_one`` should see ``timeout_s=None``."""
+        import argparse
+
+        captured: dict = {}
+
+        def fake_invoke(cli_args, *, dry_run, timeout_s=None, **_):
+            captured["timeout_s"] = timeout_s
+            return 0, "RUN_ID=p\n", None
+
+        monkeypatch.setattr(re_mod, "_invoke_one", fake_invoke)
+        ns = argparse.Namespace(
+            quality="l", max_retries=2, no_render=True,
+            allow_render_on_login=False, max_visual_revisions=2,
+            emb_store_base=None, emb_theta_high=None,
+            emb_failure_min_margin=None, emb_fake_embedder=False,
+            dry_run=False,  # no per_task_timeout attr at all
+        )
+        re_mod.run_one("A", 1, 0, re_mod.TaskSpec(arxiv_id="x"), ns)
+        assert captured["timeout_s"] is None
+
+
+# --------------------------------------------------------------------------- #
+# Real subprocess smoke test — proves the wiring isn't silently dead
+# --------------------------------------------------------------------------- #
+
+
+class TestRealSubprocessSmoke:
+    """Reviewer's ask (PR #23): a real non-dry-run smoke test.
+
+    We invoke ``paper2manim info`` (no LLM, no Manim, < 1s). It exercises:
+    - ``paper2manim/__main__.py`` → ``cli()`` resolution
+    - ``subprocess.run`` argv plumbing + capture_output + text decoding
+    - exit-code propagation
+    All four are the non-dry codepath that prior CI never covered.
+    """
+
+    def test_python_dash_m_paper2manim_info_returns_json(self, re_mod):
+        exit_code, stdout, err = re_mod._invoke_one(
+            ["info"], dry_run=False, timeout_s=30.0,
+        )
+        assert exit_code == 0, f"err={err!r}\nstdout={stdout!r}"
+        # ``info`` prints a JSON object with PAPER2MANIM_RUNS_DIR.
+        assert "PAPER2MANIM_RUNS_DIR" in stdout
+        assert err is None
+
+    def test_python_dash_m_paper2manim_unknown_command_nonzero_with_stderr(
+        self, re_mod
+    ):
+        exit_code, _stdout, err = re_mod._invoke_one(
+            ["this-command-does-not-exist"], dry_run=False, timeout_s=30.0,
+        )
+        # Click exits 2 for usage errors. Either way, must be nonzero and
+        # carry diagnostic stderr — never silently exit 0.
+        assert exit_code != 0
+        assert err is not None and ("exit" in err)

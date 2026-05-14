@@ -41,17 +41,16 @@ import csv
 import dataclasses
 import json
 import logging
+import subprocess
 import sys
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from click.testing import CliRunner
-
 from paper2manim.ablations import known_presets
 from paper2manim.ablations import resolve as resolve_preset
-from paper2manim.cli import cli as paper2manim_cli
 
 # Re-use bootstrap's RUN_ID parser so both drivers stay in lockstep.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -256,13 +255,41 @@ def emb_path_for(args: argparse.Namespace, config: str, seed: int) -> Path | Non
 
 
 def _invoke_one(
-    cli_args: list[str], *, dry_run: bool, runner: CliRunner | None = None
+    cli_args: list[str],
+    *,
+    dry_run: bool,
+    timeout_s: float | None = None,
+    runner: Callable[..., subprocess.CompletedProcess] | None = None,
+    python: str | None = None,
 ) -> tuple[int, str, str | None]:
-    """Run one ``paper2manim`` invocation.
+    """Run one ``paper2manim`` invocation in an isolated subprocess.
 
     Returns ``(exit_code, stdout, error_str)``. In dry-run mode synthesizes a
     fake stdout containing a ``RUN_ID=dryrun-<ts>-<rand>`` marker so the rest
     of the pipeline stays exercised.
+
+    Real (non-dry) invocations spawn ``python -m paper2manim`` in a fresh
+    subprocess. This buys us four guarantees the previous in-process
+    ``click.testing.CliRunner`` path could not provide:
+
+    - **Crash isolation** — an unhandled exception in one task only kills its
+      own subprocess; the batch keeps going.
+    - **Memory reclaim** — Manim and friends release GPU/VRAM/RAM on process
+      exit; in-process the leaks accumulate across tasks.
+    - **No module-state leaks** — logging handlers, the EMB cache, and Manim's
+      internal counters reset between tasks instead of bleeding through.
+    - **Enforceable timeout** — a stuck task is killed at ``timeout_s`` instead
+      of wedging the whole batch.
+
+    The ``runner`` parameter is a test seam: pass any callable with the
+    ``subprocess.run`` signature (``cmd, *, capture_output, text, timeout``)
+    to mock the child. Production callers leave it ``None``.
+
+    Exit code convention on subprocess failures (so reports stay readable):
+
+    - ``124`` — :class:`subprocess.TimeoutExpired` (matches GNU ``timeout``)
+    - ``127`` — interpreter / package not found
+    -   ``2`` — any other unexpected exception inside ``runner``
     """
     if dry_run:
         import secrets
@@ -270,17 +297,29 @@ def _invoke_one(
         fake = f"dryrun-{_t.strftime('%Y%m%d-%H%M%S')}-{secrets.token_hex(3)}"
         return 0, f"RUN_ID={fake}\n[dry-run] would have invoked: {' '.join(cli_args)}\n", None
 
-    rn = runner or CliRunner()
+    runner_fn = runner or subprocess.run
+    cmd = [python or sys.executable, "-m", "paper2manim", *cli_args]
     try:
-        result = rn.invoke(paper2manim_cli, cli_args, catch_exceptions=True)
+        result = runner_fn(
+            cmd, capture_output=True, text=True, timeout=timeout_s,
+        )
+    except subprocess.TimeoutExpired as exc:
+        partial = exc.stdout if isinstance(exc.stdout, str) else (
+            exc.stdout.decode("utf-8", errors="replace") if exc.stdout else ""
+        )
+        return 124, partial, f"timeout after {timeout_s}s"
+    except FileNotFoundError as exc:
+        return 127, "", f"executable not found: {exc}"
     except Exception as exc:  # noqa: BLE001
         return 2, "", f"runner raised: {type(exc).__name__}: {exc}"
-    err = None
-    if result.exit_code != 0:
-        err = f"exit {result.exit_code}"
-        if result.exception is not None:
-            err += f" ({type(result.exception).__name__}: {result.exception})"
-    return int(result.exit_code), result.output or "", err
+
+    err: str | None = None
+    if result.returncode != 0:
+        err = f"exit {result.returncode}"
+        stderr_tail = (result.stderr or "").strip()[-300:]
+        if stderr_tail:
+            err += f" | stderr: {stderr_tail}"
+    return int(result.returncode), result.stdout or "", err
 
 
 def run_one(
@@ -298,7 +337,11 @@ def run_one(
         config, seed, task_idx, task.arxiv_id, task.section or "<all>",
     )
     started = time.time()
-    exit_code, output, err = _invoke_one(cli_args, dry_run=args.dry_run)
+    exit_code, output, err = _invoke_one(
+        cli_args,
+        dry_run=args.dry_run,
+        timeout_s=getattr(args, "per_task_timeout", None),
+    )
     finished = time.time()
     rid = parse_run_id(output)
     log.info(
@@ -372,6 +415,13 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Don't actually run paper2manim mvp2; synthesize fake run_ids and "
         "still write a full manifest. Useful for CI and runner-wiring smoke tests.",
+    )
+    parser.add_argument(
+        "--per-task-timeout",
+        type=float,
+        default=None,
+        help="Kill a single mvp2 invocation after N seconds (default: no limit). "
+        "On timeout the task records exit_code=124 and the batch continues.",
     )
     parser.add_argument("--verbose", "-v", action="store_true")
     args = parser.parse_args(argv)
