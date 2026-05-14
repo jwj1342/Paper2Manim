@@ -185,7 +185,7 @@ proposal §4.4 描述的双通道 Episodic Memory Bank 后端整套落地：
 - **`paper2manim/emb/store.py`** — SQLite store，provenance-keyed dedup（`source_paper + source_section + scene_id + transition_ordinal`）防止重复跑同一 section 时 EMB 单调膨胀
 - **`paper2manim/emb/index.py` + `paper2manim/emb/embedder.py`** — Faiss-or-fallback in-memory index + sentence-transformers `all-MiniLM-L6-v2` / HashEmbedder 兜底（首次启动 / CI / 无网络场景）
 - **`paper2manim/emb/manager.py`** — `EpisodicMemoryBank` facade：`add_success / add_failure / query` 加 `hit_count` / `last_used` / `first_seen` provenance 字段（issue #17 cold-record pruning 即基于此）
-- **`paper2manim/emb/distill.py`** — `consolidate_run`：扫一次 `trace.jsonl` + `attempts/`，按 `theta_high`（默认 4.0）筛 success records、按 `failure_min_margin`（默认 0.5）筛 failure transitions，调用注入的 `rationale_writer` / `lesson_distiller`（LLM 或 mock）写 body
+- **`paper2manim/emb/distill.py`** — `consolidate_run`：扫一次 `trace.jsonl` + `attempts/`，按 `theta_high`（默认 85.0，proposal §4.2 0-100 量表）筛 success records、按 `failure_min_margin`（默认 5.0）筛 failure transitions，调用注入的 `rationale_writer` / `lesson_distiller`（LLM 或 mock）写 body
 - **`paper2manim/emb/retrieval.py`** — `retrieve_for_scene`：scene 描述向量 → top-k success + top-k failure → `to_state_dict()` 输出 wire-format
 - **`graphs/mvp2.py`** — `emb_retrieve` 节点（先 per-scene，PR #19 后下放到 scene 子图）+ `emb_consolidate` 节点（父图末端）
 - **`agents/coder.py`** — `## Reference Examples` / `## Known Pitfalls` 注入位置（夹在 `## Project conventions` 与 `## Previous attempt failed` 之间）
