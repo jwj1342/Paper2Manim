@@ -47,12 +47,18 @@ python3.12 --version    # 期望 3.12.x
 >
 > 系统 Python 不对时推荐用 [pyenv](https://github.com/pyenv/pyenv)、conda 或 [uv](https://github.com/astral-sh/uv) 任意一种隔离一个干净的 3.11/3.12。
 
-### 1.3 申请 MiMo API key
+### 1.3 申请 LLM provider 凭证
+
+项目支持两条互斥配置路径：
+
+**路径 A：env-MiMo 兜底（最简单）** —— 没有 `config.yaml` 时自动启用，足够跑 MVP 1.0 文本 demo。
 
 1. 到 [小米 MiMo 开放平台](https://www.xiaomimimo.com/) 注册账号、订阅 Token Plan。
 2. 拿到一个 `tp-` 开头的 key（形如 `tp-abc...`），妥善保管，**不要发到聊天群或提交到 git**。
 
 > 项目用到的 API 是 OpenAI 兼容的 `/v1/chat/completions`，base URL 是 `https://token-plan-cn.xiaomimimo.com/v1`。我们已经在代码里写死了正确的 endpoint，你只需要把 key 填进 `.env`。
+
+**路径 B：`config.yaml` 多 provider** —— MVP 3.0 阶段 2/3 的 VLM 视觉反思必走此路径，因为需要 `supports_vision: true` 的模型（Claude Opus / Sonnet via Azure、GPT-4o 等）。详见后续 §3.6 和 [`config.example.yaml`](../config.example.yaml)。
 
 ---
 

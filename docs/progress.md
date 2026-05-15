@@ -1,8 +1,8 @@
 # Progress
 
-> 更新时间：2026-05-13（图执行从串行改并行——`fan_out_scenes` Send×N + render/LLM throttles；测试基线 193/193）
+> 更新时间：2026-05-15（cleanup：删除 ~1997 行 D3 死代码 + 工程债收口；测试基线 336 passed / 2 skipped）
 >
-> 历史里程碑：MVP 2.0 真实论文验收 → YAML 多 provider + 多模态标识 → MVP 3.0 阶段 2/3 VLM 接图（`docs/vlm_experiment.md`）→ proposal §4.2 canonical schema 落地 → 阶段 4 EMB 后端落地（双通道 success/failure + RAG 注入 + 蒸馏）→ 图并行计算。
+> 历史里程碑：MVP 2.0 真实论文验收 → YAML 多 provider + 多模态标识 → MVP 3.0 阶段 2/3 VLM 接图（`docs/vlm_experiment.md`）→ proposal §4.2 canonical schema 落地 → 阶段 4 EMB 后端落地（双通道 success/failure + RAG 注入 + 蒸馏）→ 图并行计算 → A/B/C 实验 runner（#23）+ Hero Plot（#24）+ 跨域 freeze（#25）+ EMB 健康度 CLI（#22）+ visual best-of-N（#29）。
 
 ## 总览
 
@@ -19,7 +19,7 @@
 | Graphs（mvp1, mvp2） | 完成 | mvp1 保留串行；mvp2 改 fan-out（`parser → summarizer → storyboarder → Send×N run_scene → concat → emb_consolidate`），per-scene 包含完整反思 + VLM + EMB 检索闭环 |
 | Prompts | 完成 | 外置在 `prompts/*.md`，含 `vlm_scene_reviewer.md` + `visual_revision_agent.md` + `global_system.md` |
 | 多 provider + 多模态标识（YAML） | 完成 | `config.example.yaml` 模板（所有字段留空 + `$ENV_VAR` 引用）；`ModelConfig.supports_vision` / `auth_style` / `omit_temperature` 字段；`get_llm(role)` + `get_vlm()` 双入口；`provider` ∈ {openai_compatible, anthropic}，anthropic 支持 bearer auth（Azure Claude）；canonical roles ＝ {global_reader, scene_planner, scene_coder, render_fixer, final_summarizer, visual_reviser, vision_checker}，legacy alias（flash/pro/v2/v2-omni）继续可用 |
-| 测试 | 完成 | **193/193** 单测全绿（pytest -q）；含 `test_concurrency`（24）+ `test_llm_proxy`（13）+ `test_artifacts_concurrency`（4）+ `test_scene_graph`（17）+ EMB 套件 + 既有 VLM/parser/graph 测试 |
+| 测试 | 完成 | **336 passed / 2 skipped**（pytest -q，2026-05-15）；含 `test_concurrency` / `test_llm_proxy` / `test_artifacts_concurrency` / `test_scene_graph` + 完整 EMB 套件（phase1–4 + cli + embedder spec + distill schema）+ `test_run_experiment` / `test_run_bootstrap` / `test_cross_domain_and_dataset` / `test_plot_evolution` / `test_graph_mvp2_best_of_n` + 既有 VLM/parser/graph 测试 |
 | 输入解析（arXiv 源码 + 本地 PDF 兜底） | 完成 | `parsers/arxiv_source.py` + 分派 `parsers/__init__.py`；18 条新单测；SourceUnavailable 自动回退 Marker |
 | CI/CD（GitHub Actions） | 完成 | `.github/workflows/ci.yml`（pytest + ruff, py3.11/3.12 matrix）+ `codeql.yml`（每周 + 每次 PR） |
 | 分支保护 + Dependabot | 完成 | main 强制 PR + 3 个 check 必过 + 禁 force push；Dependabot 周更 pip / 月更 actions |
@@ -214,6 +214,9 @@ Schema 收敛：`visual_revision_decisions` 从 `list[str]` 改成 PR #15 的 `l
 
 ## In Progress
 
+- **Hero Plot 主实验数据收集**（proposal §5 RQ1）：runner / plot 脚本就绪（PR #23 + #24），仅跑过 7-paper smoke (`runs/exp_v2_test_27complete/`，单 config C、单 seed)；需要扩 `examples/datasets/p2m_v1.csv` 到 ≥200 条并跑完整 A/B/C × seeds
+- **跨域泛化实验真跑**（RQ3）：`scripts/cross_domain.py` 就绪，待数据集扩充后跑 Domain A train → Domain B frozen-EMB test
+- **VLM-人类一致性数据**（RQ2）：完全未启动；需要 100 视频 + 教学专家打分
 - **图并行的端到端时延加速比**：单测层等价性已覆盖；真实多 scene 论文下 `--scene-parallelism={1,3,5}` × `--llm-rps={off,1,3}` 的对照实验待补，写到 `docs/parallelism_experiment.md`
 
 ---
@@ -263,7 +266,7 @@ Schema 收敛：`visual_revision_decisions` 从 `list[str]` 改成 PR #15 的 `l
 - [x] 真实实验：5 scenes / Azure Claude Sonnet 4.6 / cap=2，平均 Δavg=+0.20，详见 `docs/vlm_experiment.md`
 - [x] Opus 4.7 端到端验证：5/5 scenes, 14 attempts, concat 84.4s mp4, 0 fatal_error
 
-#### 阶段 4（EMB / 自进化）— **后端已完成（PR #16），剩 cold-record pruning + RAG A/B**
+#### 阶段 4（EMB / 自进化）— **全部完成**
 - [x] 双通道 schema（`paper2manim/emb/schema.py`，success + failure 共享 context/provenance 头，body 按极性分歧）
 - [x] SQLite store + provenance-keyed dedup（`emb/store.py`）
 - [x] Faiss / in-memory fallback index + sentence-transformers / HashEmbedder（`emb/index.py` + `emb/embedder.py`）
@@ -272,29 +275,29 @@ Schema 收敛：`visual_revision_decisions` 从 `list[str]` 改成 PR #15 的 `l
 - [x] `retrieve_for_scene` 检索（`emb/retrieval.py`，per-scene top-k success / failure 注入 coder prompt）
 - [x] 父图 `emb_consolidate` 节点 + 子图 `emb_retrieve` 节点；coder prompt 增 `## Reference Examples` / `## Known Pitfalls` 段
 - [x] CLI 全套：`--emb` / `--emb-store-path` / `--emb-theta-high` / `--emb-failure-min-margin` / `--emb-llm-distill` / `--emb-fake-embedder`
-- [ ] [#17 Cold record pruning by hit_count / last_used](https://github.com/jwj1342/Paper2Manim/issues/17)
-- [ ] [#18 [EMB] A/B protocol for RAG injection position in Coder prompt](https://github.com/jwj1342/Paper2Manim/issues/18)
+- [x] ~~[#17 Cold record pruning by hit_count / last_used]~~ — closed via PR #22 `paper2manim emb prune`
+- [x] ~~[#18 [EMB] A/B protocol for RAG injection position in Coder prompt]~~ — closed
 
 #### 阶段 2/3 已知不足（在 `docs/vlm_experiment.md` 详述）
 - [x] ~~评分 schema 对齐 proposal~~ — issue #12 已解：收敛为 3 维（logic_flow / layout_occlusion / accuracy，0-100）
 - [x] ~~阈值化 pass~~ — issue #12 顺带做：`parse_vlm_response` 内 avg ≥ 90 → auto-upgrade 为 pass，raw_decision 保留供 trace 审计
-- [ ] **best-of-N 保留**：当前 visual_revise 闭环只保留最后一版；遇到 v1>v2 的情况（如旧 baseline TitleIntro 中 v1=2.83, v2=2.50），最终输出反而劣化
+- [x] ~~**best-of-N 保留**~~ — closed via PR #29：scene 子图累积 (rendered_video, avg_score)，`run_scene_node` 挑 max；遇到 v1>v2 时 trace 显式记录 `best_of_n_pick`
 - [ ] **VLM 与渲染分辨率耦合**：layout_occlusion 维度在 480p15 下容易被压低，VLM 让 coder 改 layout 也救不回 → 未来需要把渲染质量从 schema 里解耦
 
 #### 其他探索（长期）
-- [ ] 把 `paper2manim.domain` 的富领域模型与 `state.py` 的 `PaperState` 调和（沿用 TypedDict + reducer 还是改成 Pydantic）
-- [ ] 把 `paper2manim.llm` 与 `paper2manim.infrastructure.llm.client` 收敛到单一客户端层（D3）
+- [x] ~~把 `paper2manim.domain` 的富领域模型与 `state.py` 调和~~ — cleanup 已删除 D3-era `paper2manim/domain/`（无外部调用，1057 行死代码）；LangGraph TypedDict + reducer 仍是唯一管线
+- [x] ~~把 `paper2manim.llm` 与 `paper2manim.infrastructure.llm.client` 收敛~~ — cleanup 已删除 `paper2manim/infrastructure/{llm,models,rendering}/`（共 ~860 行死代码）；`llm.py` 是唯一 LLM 客户端入口
 - [ ] 图表抽取：原图嵌入 `ImageMobject`；或用代码复现图表
 - [ ] TTS 集成：ElevenLabs / 系统 TTS；按 storyboard 时间戳同步
 - [ ] camera：MovingCameraScene 高级运镜
 - [ ] 风格化：用户传入风格描述（"3Blue1Brown 风格"），影响配色 / 字体 / 节奏
 
 ### F. 工程债
-- [ ] Pydantic UserWarning（`PydanticSerializationUnexpectedValue` from langchain-openai `with_structured_output`）— 无害但烦人
-- [ ] mypy strict 跑通
-- [ ] 单测覆盖率 → 80%（当前未量化，估计 60–70%）
+- [x] ~~Pydantic UserWarning~~ — `pyproject.toml` `[tool.pytest.ini_options].filterwarnings` 已 ignore `PydanticSerializationUnexpectedValue` 与 `LangChainPendingDeprecationWarning`；pytest run 现在零警告
+- [ ] mypy strict — `[tool.mypy]` 基线配置就位（pragmatic-not-strict），跑 `mypy` 当前暴露 ~26 个真实 union-attr / 类型问题；逐文件修复
+- [ ] 单测覆盖率 → 80% — `pytest-cov` 已加入 dev extras + `[tool.coverage.*]` 配置就位；`fail_under` 未设，先量化再收紧
 - [x] CI（GitHub Actions）：lint + fast tests on PR（见 `.github/workflows/ci.yml`、`docs/repo-automation.md`）
-- [ ] CONTRIBUTING.md / CHANGELOG.md
+- [x] ~~CONTRIBUTING.md / CHANGELOG.md~~ — 仓库根已落地
 
 ---
 
