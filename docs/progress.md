@@ -1,6 +1,6 @@
 # Progress
 
-> 更新时间：2026-05-15（cleanup：删除 ~1997 行 D3 死代码 + 工程债收口；测试基线 336 passed / 2 skipped）
+> 更新时间：2026-05-15（cleanup：删除 ~1997 行 D3 死代码 + 工程债收口；测试基线 338 passed / 0 skipped）
 >
 > 历史里程碑：MVP 2.0 真实论文验收 → YAML 多 provider + 多模态标识 → MVP 3.0 阶段 2/3 VLM 接图（`docs/vlm_experiment.md`）→ proposal §4.2 canonical schema 落地 → 阶段 4 EMB 后端落地（双通道 success/failure + RAG 注入 + 蒸馏）→ 图并行计算 → A/B/C 实验 runner（#23）+ Hero Plot（#24）+ 跨域 freeze（#25）+ EMB 健康度 CLI（#22）+ visual best-of-N（#29）。
 
@@ -19,7 +19,7 @@
 | Graphs（mvp1, mvp2） | 完成 | mvp1 保留串行；mvp2 改 fan-out（`parser → summarizer → storyboarder → Send×N run_scene → concat → emb_consolidate`），per-scene 包含完整反思 + VLM + EMB 检索闭环 |
 | Prompts | 完成 | 外置在 `prompts/*.md`，含 `vlm_scene_reviewer.md` + `visual_revision_agent.md` + `global_system.md` |
 | 多 provider + 多模态标识（YAML） | 完成 | `config.example.yaml` 模板（所有字段留空 + `$ENV_VAR` 引用）；`ModelConfig.supports_vision` / `auth_style` / `omit_temperature` 字段；`get_llm(role)` + `get_vlm()` 双入口；`provider` ∈ {openai_compatible, anthropic}，anthropic 支持 bearer auth（Azure Claude）；canonical roles ＝ {global_reader, scene_planner, scene_coder, render_fixer, final_summarizer, visual_reviser, vision_checker}，legacy alias（flash/pro/v2/v2-omni）继续可用 |
-| 测试 | 完成 | **336 passed / 2 skipped**（pytest -q，2026-05-15）；含 `test_concurrency` / `test_llm_proxy` / `test_artifacts_concurrency` / `test_scene_graph` + 完整 EMB 套件（phase1–4 + cli + embedder spec + distill schema）+ `test_run_experiment` / `test_run_bootstrap` / `test_cross_domain_and_dataset` / `test_plot_evolution` / `test_graph_mvp2_best_of_n` + 既有 VLM/parser/graph 测试 |
+| 测试 | 完成 | **338 passed / 0 skipped**（pytest -q，2026-05-15）；含 `test_concurrency` / `test_llm_proxy` / `test_artifacts_concurrency` / `test_scene_graph` + 完整 EMB 套件（phase1–4 + cli + embedder spec + distill schema）+ `test_run_experiment` / `test_run_bootstrap` / `test_cross_domain_and_dataset` / `test_plot_evolution` / `test_graph_mvp2_best_of_n` + 既有 VLM/parser/graph 测试 |
 | 输入解析（arXiv 源码 + 本地 PDF 兜底） | 完成 | `parsers/arxiv_source.py` + 分派 `parsers/__init__.py`；18 条新单测；SourceUnavailable 自动回退 Marker |
 | CI/CD（GitHub Actions） | 完成 | `.github/workflows/ci.yml`（pytest + ruff, py3.11/3.12 matrix）+ `codeql.yml`（每周 + 每次 PR） |
 | 分支保护 + Dependabot | 完成 | main 强制 PR + 3 个 check 必过 + 禁 force push；Dependabot 周更 pip / 月更 actions |
@@ -48,7 +48,7 @@
 - `paper2manim/prompts.py` — 从 `prompts/*.md` 加载（lru_cache 但 hash 在每次进程内）
 - `paper2manim/artifacts.py` — `runs/<run_id>/` 目录管理 + `trace.jsonl` 流水
 - `paper2manim/logging_setup.py` — logging.basicConfig + 可选 LangSmith hook
-- `paper2manim/cli.py` — click 子命令 `mvp1` / `mvp2` / `info`，含 `--no-render` / `--quality` / `--max-retries` / `--vlm` / `--no-vlm` / `--max-visual-revisions`（mvp2，default=2）/ `--pdf` 或 `--arxiv <id|url>` / `--section <name>` / `--emb` 系列 / `--scene-parallelism` / `--render-concurrency` / `--llm-rps` / `--allow-render-on-login` / login-node guard；父图 `recursion_limit = 50`（扁平 fan-out），每个 `run_scene` 内部对子图单独按 `max(60, 6 + 3·(max_retries+1) + 5·max_visual_revisions + 4)` 算（`graphs/mvp2.py:152`）
+- `paper2manim/cli.py` — click 子命令 `mvp1` / `mvp2` / `info` / `emb`（`emb` 组在 `paper2manim/cli_emb.py`，含 `stats` / `list` / `show` / `prune` / `retest` 五个 EMB 健康度子命令），含 `--no-render` / `--quality` / `--max-retries` / `--vlm` / `--no-vlm` / `--max-visual-revisions`（mvp2，default=2）/ `--pdf` 或 `--arxiv <id|url>` / `--section <name>` / `--emb` 系列（`--emb-store-path` / `--emb-theta-high` / `--emb-failure-min-margin` / `--emb-llm-distill` / `--emb-fake-embedder` / `--emb-readonly` / `--emb-no-success-channel` / `--emb-no-failure-channel`）/ `--dataset-domain` / `--scene-parallelism` / `--render-concurrency` / `--llm-rps` / `--allow-render-on-login` / login-node guard；父图 `recursion_limit = 50`（扁平 fan-out），每个 `run_scene` 内部对子图单独按 `max(60, 6 + 3·(max_retries+1) + 5·max_visual_revisions + 4)` 算（`graphs/mvp2.py:157`）
 
 ### Schemas
 - `paper2manim/schemas/storyboard.py` — `SceneModel` / `StoryboardModel`（含 PascalCase 校验）
@@ -97,7 +97,7 @@
 - `tests/test_graph_mvp2.py`（**4 用例**：反思闭环两次 latex error 后第三次成功；max_retries=1 give_up；parser fatal 早退；render_node 缺 storyboard 守卫）
 - `tests/test_graph_mvp2_vlm.py`（**8 用例**：pass 短路 / revise→pass / 触 cap / vlm 关闭 / VLM 判 fail 不剔出 rendered_videos（soft-fail）/ vlm_review 抛异常时 auto-pass / 跨 scene 混合 verdict / **avg ≥ 90 auto-pass bypass 端到端**）
 - `tests/test_vlm_response_parse.py`（**10 用例**：两个 JSON 对象输入只取第一个 / 嵌套花括号 / 字符串内花括号 / 不平衡输入返回 None / chatty 模型先思考再 JSON / 缺失维度记 None / [0,100] clamp / avg ≥ 90 auto-pass / avg < 90 不 auto-pass / 全空 scores 不 auto-pass）
-- 当前结果：**193/193 通过**（pytest -q，ruff clean）
+- 当前结果：**338/338 通过 / 0 skipped**（pytest -q，2026-05-15，ruff clean）
 
 ### 端到端验收
 - **MVP 1.0** 真实跑通：`examples/mvp1/pythagorean.txt` → `runs/20260510-080654-3a1159/final/output.mp4`，时长 10.47s，854×480@15fps，h264，87.7 KB
@@ -191,9 +191,9 @@ proposal §4.4 描述的双通道 Episodic Memory Bank 后端整套落地：
 - **`agents/coder.py`** — `## Reference Examples` / `## Known Pitfalls` 注入位置（夹在 `## Project conventions` 与 `## Previous attempt failed` 之间）
 - **CLI** — `--emb` / `--emb-store-path` / `--emb-theta-high` / `--emb-failure-min-margin` / `--emb-use-llm-distillers`
 
-未做、open issue 跟进：
-- [#17 §9 Cold record pruning by hit_count / last_used](https://github.com/jwj1342/Paper2Manim/issues/17)
-- [#18 [EMB] A/B protocol for RAG injection position in Coder prompt](https://github.com/jwj1342/Paper2Manim/issues/18)
+后续跟进 issue 现已全部 closed（详见下方 To Do.E 阶段 4）：
+- [#17 §9 Cold record pruning by hit_count / last_used](https://github.com/jwj1342/Paper2Manim/issues/17) — closed via PR #22 `paper2manim emb prune`
+- [#18 [EMB] A/B protocol for RAG injection position in Coder prompt](https://github.com/jwj1342/Paper2Manim/issues/18) — closed
 
 ### PR #19 — 图执行从串行改并行
 
