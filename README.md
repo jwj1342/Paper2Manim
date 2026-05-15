@@ -11,10 +11,10 @@
 | **MVP 1.0** | 已验证 | 短文本（摘要 / 单定理） | Storyboarder → Coder → Render | 15–30 秒视频 | 验证最短端到端链路可行 |
 | **MVP 2.0** | 已验证 | arXiv 源码 / PDF | Parser(arXiv 源码 / Marker) → Summarizer → Storyboarder → Coder ⇄ Reviewer 反思闭环 → Concat | 1–2 分钟多场景视频 | 反思机制对 Pass@1 的提升 |
 | **MVP 3.0 阶段 2/3** | 已验证 | + 渲染帧 | + Frame Sampler → VLM Multi-Dim Review (3 维 × 0-100) → Visual Revise | 视觉迭代后的多场景视频 | VLM-as-Judge 真能驱动 reflection |
-| **MVP 3.0 阶段 4** | 后端就绪 | + 历史 EMB | + 双通道 Episodic Memory Bank（success + failure）+ per-scene RAG 注入 + 蒸馏沉淀 | 跨论文进化的多场景视频 | **自进化 + 跨域记忆迁移**（详见提案 §4） |
+| **MVP 3.0 阶段 4** | 后端完成（待跑 RQ1/2/3 主实验） | + 历史 EMB | + 双通道 Episodic Memory Bank（success + failure）+ per-scene RAG 注入 + 蒸馏沉淀 + cold-record pruning + 实验 runner / Hero Plot / 跨域 freeze | 跨论文进化的多场景视频 | **自进化 + 跨域记忆迁移**（详见提案 §4） |
 | **图计算并行化** | 已落地 | — | `fan_out_scenes` 发 N 个 `Send` → 每个 scene 在自己的 sub-graph 独立跑 | — | 把 "Pass@1 → Hero Plot" 实验循环从天级压到小时级 |
 
-**当前状态**：MVP 1.0 / 2.0 / 3.0 阶段 2/3 端到端均已验证。阶段 4 EMB 后端（双通道 schema + SQLite store + Faiss 检索 + 蒸馏 + RAG 注入）整套落地，CLI `--emb` 开启；剩余 cold-record pruning 与 RAG 注入位置 A/B 见 [#17](https://github.com/jwj1342/Paper2Manim/issues/17) / [#18](https://github.com/jwj1342/Paper2Manim/issues/18)。图计算并行化已就位，默认串行行为零差异；用 `--scene-parallelism N` 显式打开。详细进度与 To Do 清单见 [`docs/progress.md`](./docs/progress.md)。
+**当前状态**：MVP 1.0 / 2.0 / 3.0 阶段 2/3 端到端均已验证。阶段 4 EMB 后端（双通道 schema + SQLite store + Faiss 检索 + 蒸馏 + RAG 注入）整套落地，CLI `--emb` 开启；后端跟进项 cold-record pruning（[#17](https://github.com/jwj1342/Paper2Manim/issues/17)，PR #22 `paper2manim emb prune`）与 RAG 注入位置 A/B（[#18](https://github.com/jwj1342/Paper2Manim/issues/18)）已全部 closed。图计算并行化已就位，默认串行行为零差异；用 `--scene-parallelism N` 显式打开。剩余工作为 RQ1/2/3 主实验数据收集（详细进度与 To Do 清单见 [`docs/progress.md`](./docs/progress.md)）。
 
 > **新协作者请直接阅读 [`docs/getting-started.md`](./docs/getting-started.md)**——一份在普通笔记本 / 服务器上从零跑通的详尽入门指南，含三大平台依赖、API key 申请、第一个 demo、看视频、改 prompt、常见报错排查。
 
@@ -231,7 +231,13 @@ Paper2Manim/
 │
 ├── paper2manim/               ← 主 Python 包（pip install -e . 后可 import）
 │   ├── __init__.py
-│   ├── cli.py                   click 命令行入口；子命令 mvp1 / mvp2 / info
+│   ├── cli.py                   click 命令行入口；子命令 mvp1 / mvp2 / info / emb
+│   ├── cli_emb.py               `paper2manim emb` 子命令组：stats / list / show / prune / retest
+│   │                            （EMB 健康度审计 + cold-record 清理 + 实验性 VLM 重测）
+│   ├── ablations.py             实验配置预设（A / B / C / C_no_* / C_bootstrap_*）
+│   │                            供 scripts/run_experiment.py 与测试共享（proposal §5 RQ1 + §8.3）
+│   ├── datasets/                任务数据集枚举（DOMAINS / SPLITS）+ CSV 工具
+│   │                            CLI --dataset-domain 与 scripts/dataset_validate.py 的单一真源
 │   ├── config/                  pydantic-settings 包
 │   │   ├── env.py                 从 .env 读取运行时配置（MIMO_API_KEY 等）
 │   │   ├── model_config.py        ModelConfig / ModelSettings：多 provider 模型注册 + role 查表
@@ -315,7 +321,7 @@ Paper2Manim/
 │
 ├── config.example.yaml        ← AppSettings YAML 模板（多 provider 模型注册表）
 │
-├── tests/                     ← pytest 测试套件（336 passed / 2 skipped）
+├── tests/                     ← pytest 测试套件（338 passed / 0 skipped）
 │   ├── conftest.py              共享 fixtures（隔离 runs 目录、mock LLM）
 │   ├── test_classify.py         错误分类用例 + 静态检查器集成（D1/D4）
 │   ├── test_llm_client.py       MiMo 兜底 + YAML 路由边界条件
@@ -338,10 +344,19 @@ Paper2Manim/
 │
 ├── examples/                  ← 输入样例
 │   ├── mvp1/                    5 个固定短文本 demo（pythagorean / fourier / euler / newton / linear-regression）
-│   └── mvp2/                    （留空，由用户放入真实论文 PDF）
+│   ├── mvp2/                    （留空，由用户放入真实论文 PDF）
+│   ├── bootstrap_v1.csv         scripts/run_bootstrap.py 的样例任务列表（arxiv_id, section_name）
+│   └── datasets/                v1 任务池
+│       ├── p2m_v1.csv             curated 列表，5 列 schema（arxiv_id / section / domain / split / expected_scene_count_min）
+│       └── p2m_v1_schema.md       schema 文档；scripts/dataset_validate.py 校验依据
 │
-├── scripts/                   ← 可选辅助脚本（普通用户用不到，仅 HPC 加速用）
-│   ├── setup_env.sh             模块加载 + venv 创建 + pip install 一条龙
+├── scripts/                   ← 实验与运维脚本
+│   ├── run_experiment.py        proposal §5 RQ1 / §8.3 主 runner：A/B/C × seeds × tasks 的 manifest 驱动
+│   ├── run_bootstrap.py         冷启动批：用 examples/bootstrap_v1.csv 给 EMB 灌初始数据
+│   ├── cross_domain.py          RQ3 跨域 freeze 实验：Domain-A train → freeze → Domain-B test/baseline
+│   ├── plot_evolution.py        Hero Plot：Pass@1 / 反思轮数 / VLM 平均分 + 95% bootstrap CI + EMB hits 面板
+│   ├── dataset_validate.py      v1 schema 校验（列存在性 / enum / 可选 arXiv 可达性）
+│   ├── setup_env.sh             模块加载 + venv 创建 + pip install 一条龙（HPC 用）
 │   ├── install_tinytex.sh       无 sudo 装用户级 LaTeX
 │   ├── render_node.sh           sbatch 模板（Slurm 集群批量渲染）
 │   └── smoke_test.sh            最小 demo 冒烟脚本

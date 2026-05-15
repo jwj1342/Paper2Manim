@@ -256,7 +256,7 @@ x 轴是累计处理的 paper-section 数。Hero Plot 上没有冷启动 / 稳�
   - §4.4 实现双桶 EMB + 蒸馏管线 + 检索注入。
   - 引入"进化曲线"作为系统级核心评估指标。
 - **冷启动**：bootstrap 批次（前 50–100 个 paper-section 任务）让 EMB 从空集起步；该批次内 Pass@1 偏低是预期行为，主要目的是产出初始记忆。bootstrap 段与稳态期使用完全相同的代码路径，差别仅在 EMB 规模。
-- **当前状态**：VLM 反思闭环（§4.2 + §4.3）已 land；§4.1 的检索与 §4.4 的双通道沉淀也已落地（PR #16 `paper2manim/emb/`：dual-channel schema + SQLite store + Faiss 检索 + 蒸馏 + RAG 注入，CLI `--emb` 开启）。剩余工程工作：cold-record pruning（[#17](https://github.com/jwj1342/Paper2Manim/issues/17)）与 RAG 注入位置 A/B（[#18](https://github.com/jwj1342/Paper2Manim/issues/18)）。本提案的全部核心创新点（RQ1/2/3）都在此版本上完成实验。
+- **当前状态**：VLM 反思闭环（§4.2 + §4.3）已 land；§4.1 的检索与 §4.4 的双通道沉淀也已落地（PR #16 `paper2manim/emb/`：dual-channel schema + SQLite store + Faiss 检索 + 蒸馏 + RAG 注入，CLI `--emb` 开启）。后端跟进项 cold-record pruning（[#17](https://github.com/jwj1342/Paper2Manim/issues/17)，PR #22 `paper2manim emb prune`）与 RAG 注入位置 A/B（[#18](https://github.com/jwj1342/Paper2Manim/issues/18)）已全部 closed。本提案的全部核心创新点（RQ1/2/3）都在此版本上完成实验。
 
 ---
 

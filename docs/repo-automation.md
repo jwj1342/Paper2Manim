@@ -23,7 +23,7 @@
 - **Python matrix**：3.11 + 3.12 并行
 - **ruff check**：lint，**失败则 PR 红**
 - **ruff format --check**：格式漂移，目前**仅 warning**（`continue-on-error: true`）
-- **pytest -m "not slow"**：跑 mock 测试套件（当前 193 个），**失败则 PR 红**
+- **pytest -m "not slow"**：跑 mock 测试套件（当前 338 个），**失败则 PR 红**
 
 ### 不跑什么
 
@@ -155,7 +155,7 @@ gh pr create --fill   # 或在 GitHub UI 上开
 
 | 项 | 在哪 | 作用 |
 |---|---|---|
-| CI workflow | `.github/workflows/ci.yml` | push / PR 时跑 ruff + 46 个 mock 测试，py3.11/3.12 双 matrix |
+| CI workflow | `.github/workflows/ci.yml` | push / PR 时跑 ruff + 338 个 mock 测试，py3.11/3.12 双 matrix |
 | CodeQL workflow | `.github/workflows/codeql.yml` | push / PR + 每周一基线扫描 Python 安全漏洞 |
 | Dependabot config | `.github/dependabot.yml` | 周更 pip / 月更 actions，分组 PR |
 | Branch protection (main) | Settings → Branches | 见第 3 节：必须 PR + 3 个 check 全绿 + 1 approval + 不允许 bypass |
