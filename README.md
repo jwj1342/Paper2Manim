@@ -25,7 +25,7 @@
 | **Python ≥ 3.11, < 3.13** | 主语言 | 已在 3.11 上验证 |
 | **ffmpeg** | Manim 视频编码 | 系统包管理器装即可 |
 | **LaTeX**（推荐 TeX Live full / MacTeX / TinyTeX） | Manim 公式渲染 | Manim 文档列出的最小包集见下文 |
-| **MiMo API key** | LLM 调用 | 从 [MiMo 控制台](https://www.xiaomimimo.com/) 申请 Token Plan，`tp-` 前缀 |
+| LLM provider 凭证 | LLM 调用 | 两条路径任选一：(1) `config.yaml` 配多 provider（`openai_compatible` / `anthropic`，含 Azure-hosted Claude），见 `config.example.yaml`；(2) 没 `config.yaml` 时自动走 env-MiMo 兜底——从 [MiMo 控制台](https://www.xiaomimimo.com/) 申请 Token Plan，`tp-` 前缀 |
 | 网络 | 调用 LLM API + 首次安装时编译 `skia-pathops` | 完全离线环境需要预编译 wheel |
 
 按平台安装系统依赖：
@@ -75,25 +75,45 @@ pip install -e ".[dev]"             # 加开发工具：pytest / ruff / mypy
 
 > 提示：Manim 的 `skia-pathops` 依赖在 PyPI 上没有 Linux 预编译 wheel，会从源码编译并通过 git 拉 `chromium.googlesource.com` 上的 skia 子模块。首次安装请确保该域名可达，预计 5–10 分钟。
 
-## 配置 API key 与环境变量
+## 配置 LLM provider 与环境变量
 
-我们用 [`pydantic-settings`](https://docs.pydantic.dev/latest/concepts/pydantic_settings/) 从项目根目录的 **`.env`** 文件读取配置。仓库提供了 [`.env.example`](./.env.example) 作为模板，按以下步骤生成本地配置：
+LLM provider 配置走两条互斥的路径，**任选其一**：
+
+### A. `config.yaml`（推荐 — 多 provider，含 VLM）
+
+适合：用 Claude / GPT-4o / Doubao / Azure-hosted Claude 之类需要 vision-capable VLM 的场景；或者想给不同 agent role 分配不同模型。
+
+```bash
+cp config.example.yaml config.yaml
+# 编辑 config.yaml，把每个 role 指向你的 provider；
+# 在 .env 里设置被 $ENV_VAR 引用的密钥（如 AZURE_CLAUDE_API_KEY）
+```
+
+`config.yaml` 把 7 个 canonical role（`global_reader` / `scene_planner` / `scene_coder` / `render_fixer` / `final_summarizer` / `visual_reviser` / `vision_checker`）路由到 `openai_compatible` 或 `anthropic` provider；`vision_checker` 必须 `supports_vision: true`。完整字段说明在 [`config.example.yaml`](./config.example.yaml)。
+
+### B. env-MiMo 兜底（最简单 — 没有 `config.yaml` 时自动启用）
+
+适合：只想跑 MVP 1.0 文本 demo，或还没拿到 VLM 凭证。
 
 ```bash
 cp .env.example .env
-# 用任意编辑器打开 .env，把 MIMO_API_KEY 改成你自己的 tp- key
+# 把 MIMO_API_KEY 填入（tp- 前缀，从 https://www.xiaomimimo.com/ 申请）
 ```
 
-`.env` 已加入 `.gitignore`，不会被误提交。每个变量的含义都在 `.env.example` 里有详细注释，最关键的两个：
+> ⚠️ `config.yaml` **存在但解析失败** 时显式抛 `RuntimeError`，不会静默切回 env-MiMo —— 这是为了防止流量被悄悄切到错误的供应商。
 
-| 变量 | 必填？ | 说明 |
+### `.env` 关键变量
+
+`.env` 已加入 `.gitignore`，不会被误提交。
+
+| 变量 | 何时必填 | 说明 |
 |---|---|---|
-| `MIMO_API_KEY` | 必填 | MiMo Token Plan 的 `tp-` 前缀 key |
-| `MIMO_BASE_URL` | 默认即可 | `https://token-plan-cn.xiaomimimo.com/v1`（**注意不是** `api.xiaomimimo.com`，那个端点不认 `tp-` key） |
-| `PAPER2MANIM_DEFAULT_MODEL` | 默认即可 | `flash`（→ `mimo-v2.5`）/ `pro`（→ `mimo-v2.5-pro`）/ `v2`（→ `mimo-v2-pro`，备用）/ `v2-omni`（→ `mimo-v2-omni`） |
-| `PAPER2MANIM_MAX_RETRIES` | 默认即可 | MVP 2.0 反思循环每个 scene 的最大重试轮数（默认 3） |
+| `MIMO_API_KEY` | 无 `config.yaml` 时必填 | MiMo Token Plan 的 `tp-` 前缀 key |
+| `MIMO_BASE_URL` | 默认即可 | `https://token-plan-cn.xiaomimimo.com/v1`（**不是** `api.xiaomimimo.com`） |
+| `AZURE_CLAUDE_API_KEY` 等 | 用 `config.yaml` 时 | `config.yaml` 里 `$ENV_VAR` 引用的任何 secret |
+| `PAPER2MANIM_MAX_RETRIES` | 默认即可 | 反思循环每个 scene 的最大重试轮数（默认 3） |
 | `PAPER2MANIM_QUALITY` | 默认即可 | Manim 渲染质量 `l`/`m`/`h`（480p15 / 720p30 / 1080p60） |
-| `PAPER2MANIM_RUNS_DIR` | 默认即可 | 运行产物目录，默认是项目根下的 `runs/` |
+| `PAPER2MANIM_RUNS_DIR` | 默认即可 | 运行产物目录，默认 `runs/` |
 
 环境变量的读取在 import `paper2manim.config` 时一次完成。激活 venv 后，从项目根目录运行 CLI 即可，**不需要**手工 `export` 任何变量；`.env` 会被自动加载。
 
@@ -277,19 +297,11 @@ Paper2Manim/
 │   │   ├── summary.py             SummaryModel + FormulaItem（MVP 2.0）
 │   │   └── error_feedback.py      RenderResultModel / ErrorFeedback
 │   │
-│   ├── domain/                  ← 合作者引入的 DDD 领域模型（独立于 LangGraph state）
-│   │   └── models.py              SceneSpec / PaperVideoPlan / VisualReviewResult 等
-│   │                              当前为 MVP 3.0 VLM 子系统服务，未与 PaperState 融合
-│   │
-│   ├── infrastructure/          ← 多 provider 抽象层（合作者）
-│   │   ├── models/                openai_compatible / mock 模型客户端 + factory + registry
-│   │   ├── llm/                   LLMClient（基于 models/ 的高层包装）
-│   │   ├── vlm/                   VLMClient Protocol + openai_compatible + anthropic + mock
-│   │   └── rendering/             另一份 manim 渲染器（与 sandbox/render.py 并存）
+│   ├── infrastructure/          ← VLM client 抽象层
+│   │   └── vlm/                   VLMClient Protocol + openai_compatible + anthropic + mock
 │   │
 │   └── utils/                   ← 通用工具
-│       ├── prompt_loader.py       从 repo-root prompts/ 加载 + 拼接 global_system.md
-│       └── text_utils.py          ```python``` 块抽取 / JSON 抽取等
+│       └── frame_sampler.py       ffmpeg 抽帧 → montage PNG（VLM 视觉反思用）
 │
 ├── prompts/                   ← 所有 LLM 系统提示词（外置 / 热加载）
 │   ├── global_system.md         所有 agent 共享的人设头（被 load_agent_prompt 拼接）
@@ -303,15 +315,26 @@ Paper2Manim/
 │
 ├── config.example.yaml        ← AppSettings YAML 模板（多 provider 模型注册表）
 │
-├── tests/                     ← pytest 测试套件（193 测试全绿）
+├── tests/                     ← pytest 测试套件（336 passed / 2 skipped）
 │   ├── conftest.py              共享 fixtures（隔离 runs 目录、mock LLM）
 │   ├── test_classify.py         错误分类用例 + 静态检查器集成（D1/D4）
-│   ├── test_llm_client.py       MiMo client 边界条件（key 缺失、未知 alias）
+│   ├── test_llm_client.py       MiMo 兜底 + YAML 路由边界条件
+│   ├── test_llm_proxy.py        RateLimitedLLM 透明代理 + TokenBucket gating
 │   ├── test_storyboarder.py     mock LLM 验证结构化输出
 │   ├── test_coder.py            python 块抽取、error_feedback 回灌进 prompt
-│   ├── test_graph_mvp1.py       端到端 mock：含 / 不含 render 两条路径
-│   ├── test_graph_mvp2.py       反思闭环：两次失败后第三次成功 + max_retries give_up
-│   └── test_arxiv_source.py     id 变体解析 / flatten / 截节 / tarball 解压（18 用例）
+│   ├── test_graph_mvp1.py       MVP 1.0 端到端 mock：含 / 不含 render 两条路径
+│   ├── test_graph_mvp2.py       MVP 2.0 反思闭环：失败后重试成功 + max_retries give_up
+│   ├── test_graph_mvp2_vlm.py   MVP 3.0 阶段 2/3 VLM 闭环（含 best-of-N + soft-fail）
+│   ├── test_graph_mvp2_best_of_n.py  visual best-of-N 选择 + trace 记录
+│   ├── test_vlm_response_parse.py    VLM JSON 解析鲁棒性 + auto-pass bypass
+│   ├── test_scene_graph.py       per-scene 子图节点契约 + 并发等价性
+│   ├── test_concurrency.py / test_artifacts_concurrency.py  RENDER_SEMAPHORE + trace lock
+│   ├── test_emb_phase{1,2,3,4}.py / test_emb_cli.py / test_emb_embedder_spec.py /
+│   │     test_emb_distill_score_schema.py    EMB 全栈（schema / store / index / distill / CLI）
+│   ├── test_run_experiment.py / test_run_bootstrap.py    A/B/C runner + bootstrap driver
+│   ├── test_cross_domain_and_dataset.py    跨域 freeze + dataset CSV schema 校验
+│   ├── test_plot_evolution.py    Hero Plot aggregation + 95% bootstrap CI
+│   └── test_arxiv_source.py     id 变体解析 / flatten / 截节 / tarball 解压
 │
 ├── examples/                  ← 输入样例
 │   ├── mvp1/                    5 个固定短文本 demo（pythagorean / fourier / euler / newton / linear-regression）

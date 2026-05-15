@@ -40,6 +40,7 @@ emb = [
 dev = [
     "pytest>=8",
     "pytest-mock>=3.12",
+    "pytest-cov>=5",
     "ruff>=0.5",
     "mypy>=1.10",
 ]
@@ -56,6 +57,60 @@ markers = [
     "slow: requires real LLM API or real Manim render (skipped on login node)",
 ]
 testpaths = ["tests"]
+# Silence noisy upstream warnings that have no actionable fix on our side and
+# that otherwise clutter every CI run. Add new entries sparingly and prefer a
+# narrowly-scoped `message=` regex over a blanket category filter.
+filterwarnings = [
+    # langgraph 1.x emits this on import; class is
+    # langchain_core._api.deprecation.LangChainPendingDeprecationWarning, a
+    # subclass of PendingDeprecationWarning. Filter by full dotted category to
+    # win against the early-import order.
+    "ignore::langchain_core._api.deprecation.LangChainPendingDeprecationWarning",
+    # langchain-openai 0.3 + pydantic 2.13 surface this on every
+    # with_structured_output call. Harmless; serializer just sees a Mock.
+    # Matched by message because the class lives in pydantic_core (C ext)
+    # and isn't importable as a pure-Python warning category.
+    "ignore:Pydantic serializer warnings:UserWarning",
+    "ignore:.*PydanticSerializationUnexpectedValue.*:UserWarning",
+]
+
+[tool.coverage.run]
+source = ["paper2manim"]
+branch = true
+omit = [
+    "*/__pycache__/*",
+    "paper2manim/__main__.py",
+]
+
+[tool.coverage.report]
+# No fail_under yet — first quantify, then tighten. See progress.md §To Do F.
+show_missing = true
+skip_covered = false
+exclude_lines = [
+    "pragma: no cover",
+    "raise NotImplementedError",
+    "if TYPE_CHECKING:",
+    "if __name__ == .__main__.:",
+]
+
+[tool.mypy]
+# Pragmatic baseline — strict-mode pass is tracked as progress.md §To Do F debt.
+# These get us type-aware checking on first-party code without forcing a 100+
+# fix marathon. Tighten one flag at a time.
+python_version = "3.11"
+files = ["paper2manim"]
+ignore_missing_imports = true
+follow_imports = "silent"
+warn_redundant_casts = true
+warn_unused_ignores = true
+warn_unreachable = true
+check_untyped_defs = true
+# Skip the third-party-heavy LangGraph / LangChain edges until we've added
+# protocols for the parts we actually consume.
+exclude = [
+    "paper2manim/graphs/.*",
+    "paper2manim/infrastructure/.*",
+]
 
 [tool.ruff]
 line-length = 100

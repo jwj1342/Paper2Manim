@@ -118,11 +118,6 @@ class PaperState(TypedDict, total=False):
     # post-run inspectors don't lose per-scene VLM detail (previously
     # available as a top-level field, now scoped to SceneState).
     scene_reports: Annotated[list[dict], operator.add]
-    # mvp1 (serial) still threads these three per-scene mutables on PaperState;
-    # mvp2's fan-out keeps them on SceneState instead and does not touch these.
-    vlm_revision_count: int  # mvp1 only
-    last_visual_review: dict | None  # mvp1 only
-    current_montage_path: str | None  # mvp1 only
 
     # ---- Episodic Memory Bank (MVP 3.0 §4.1 + §4.4) ----
     # Enabled by `--emb`. `emb_store_path` points at the directory holding
