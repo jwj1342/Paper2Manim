@@ -1,4 +1,4 @@
-# P2M-Bench: Dataset & Benchmark for Paper-to-Manim Educational Animation
+# P2M-Bench: Dataset & Benchmark for Paper2Manim
 
 ## 1. 数据集结构
 
@@ -21,7 +21,7 @@ paper_full_text        ←  整篇论文背景（建立语境，但 ≠ 必须�
 | 字段 | 类型 | 必填 | 含义 / 与 proposal 的对应 |
 |---|---|---|---|
 | `id` | str | ✅ | `<paper_id>_<unit_kind>_<unit_index>`，主键 |
-| `category` | enum | ✅ | `Concept / Equation / Algorithm / Figure / Architecture / Experiment` — 教学任务类型 |
+| `category` | enum | ✅ | `Concept / Equation / Algorithm / Figure / Architecture / Experiment` — 可视化任务类型 |
 | `domain` | enum | ✅ | `cs / math / physics / quantum / econ`（与 `paper2manim/datasets/constants.py::DOMAINS` 同步） |
 | `paper_id` | str | ✅ | arXiv id（兼容 `hep-th/9901001` 旧式 id）或本地 PDF SHA-1 |
 | `paper_title` | str | ✅ | 论文标题 |
@@ -29,8 +29,11 @@ paper_full_text        ←  整篇论文背景（建立语境，但 ≠ 必须�
 | `target_unit` | struct | ✅ | 见 [§1.3](#13-target_unit-结构) |
 | `source_type` | enum | ✅ | `subsection / equation / figure / table / algorithm / full_paper` |
 | `main_topics` | list[str] | ✅ | 3-5 个核心知识点；驱动 storyboarder 选材，也用作 EMB 检索辅助 key |
+| `split` | enum | ✅ | `dev / test / hard_test / human_gold`（详见 [§3](#3-split-定义)） |
+| `task_idx` | int | ⚠️ dev only | `dev` 内固定序号 `0..N-1`，按 `(domain, source_type)` stratified shuffle 一次后**冻结**；所有 seed 共用此序——保证 Hero Plot 横轴跨 run 可比。`test / hard_test / human_gold` 留空 |
+| `difficulty` | enum | ✅ | `easy / medium / hard`，由"参考分镜数 / 跨 scene 依赖 / 数学推导深度"三轴投票而得；Hero Plot 与 ablation 报数时**按 difficulty 分层报告**，避免难度漂移污染主曲线 |
 
-| `split` | enum | ✅ | `dev / test / hard_test / human_gold`（[§4](#4-与当前-p2m_v1csv-的关系迁移路径) 给出与 `bootstrap/eval/cross_train/cross_test` 的映射） |
+**`category` 与 `source_type` 的区别**：`source_type` 是**原文形态**（LaTeX 里是 `equation` 环境还是 `figure` 环境），驱动 parser 抽取；`category` 是**可视化意图**（观众要"看几何示意"还是"跟公式推导"还是"过算法步骤"），驱动评测端的归类与难度分布报告。二者不是 1:1：例如 NeRF 体积渲染示意图 `source_type=figure` 但 `category=Concept`；Transformer 架构图 `source_type=figure` 但 `category=Architecture`。
 
 ### 1.3 `target_unit` 结构
 
@@ -57,6 +60,9 @@ paper_full_text        ←  整篇论文背景（建立语境，但 ≠ 必须�
   "id": "1706.03762_eq_scaled_dot",
   "category": "Equation",
   "domain": "cs",
+  "split": "dev",
+  "task_idx": 12,
+  "difficulty": "medium",
   "paper_id": "1706.03762",
   "paper_title": "Attention Is All You Need",
   "paper_full_text": "...",
@@ -102,8 +108,8 @@ P2M-Bench **不提供** "唯一标准 Manim 视频"。它提供的是：
 
 ```text
 1. 整篇论文理解材料 (paper_full_text, paper_sections)
-2. 局部讲解锚点      (target_unit, anchor)
-3. 关键知识点        (key_claims, core_entities, common_misunderstandings)
+2. 局部可视化锚点    (target_unit, anchor)
+3. 关键信息点        (key_claims, core_entities, common_misunderstandings)
 4. 参考分镜          (reference_scene_plan)         ← 评测端 reference, 见下方 §2.4 红线
 5. 评测 rubric       (evaluation_rubric)            ← VLM-as-Judge / Human 共用
 ```
@@ -111,24 +117,36 @@ P2M-Bench **不提供** "唯一标准 Manim 视频"。它提供的是：
 这样每条样本能评测 5 件事：
 
 1. 是否理解整篇论文的背景与目标（covered by `paper_full_text` 输入完整）
-2. 是否准确定位并解释 `target_unit`（covered by `key_claims` × VLM/Human 打分）
-3. 是否产出合理的教学分镜（covered by `reference_scene_plan` × storyboard 对齐度）
+2. 是否准确定位并可视化 `target_unit`（covered by `key_claims` × VLM/Human 打分）
+3. 是否产出合理的可视化分镜（covered by `reference_scene_plan` × storyboard 对齐度，算法见下方）
 4. 是否产出可执行 Manim 代码（covered by 现有 `Pass@1` / `Pass@K` 指标）
-5. 视频是否语义忠实、画面清晰、有教学性（covered by `evaluation_rubric` × VLM 三维分）
+5. 视频是否语义忠实、画面清晰、信息传达准确（covered by `evaluation_rubric` × VLM 三维分）
+
+**storyboard 对齐度评分算法**（解决"分镜合理性"这一维如何机器自动算）：
+
+把模型实际产出的 scene plan 与 `reference_scene_plan` 做 beat 级匹配——
+
+- **粗对齐 `0.3 权重`**：beat 数差异（容忍 ±1 给满分，每多/少 1 个 -0.2）+ 顺序一致性（Kendall τ 归一化到 [0,1]）
+- **内容对齐 `0.7 权重`**：每对 beat 描述算 embedding 余弦相似度（用 `paper2manim/emb/embedder.py` 的默认模型），按双向最大匹配（Hungarian）求最优配对后取均值
+- **聚合**：`storyboard_alignment = 0.3 × 粗对齐 + 0.7 × 内容对齐 ∈ [0, 1]`
+
+实现位置：`scripts/score_against_rubric.py::score_storyboard_alignment`。该分数**不进入** `Pass@1` 阈值，而是作为独立维度在 RQ1 / RQ2 报表里单列——避免 storyboard 评分错误传染 Pass@1 主指标。
 
 ### 1.6 `full_paper` 任务专属指标
 
-`source_type=full_paper` 与其它 5 种 scene-local 类型有本质差别：它要求模型把整篇论文压成一支 60-90s 视频，跨多个 scene 串成连贯讲解。scene-local 的三维（logic_flow / layout_occlusion / accuracy）只评单 scene，**评不到跨 scene 的衔接质量**。因此 `full_paper` 样本的 `evaluation_rubric` 在标准三维之外额外要求两维：
+`source_type=full_paper` 与其它 5 种 scene-local 类型有本质差别：它要求模型把整篇论文压成一支 60-90s 视频，跨多个 scene 串成连贯叙事。scene-local 的三维（logic_flow / layout_occlusion / accuracy）只评单 scene，**评不到跨 scene 的衔接质量**。因此 `full_paper` 样本的 `evaluation_rubric` 在标准三维之外额外要求两维：
 
 | 维度 | 评的是什么 | 0 锚点 | 100 锚点 |
 |---|---|---|---|
-| `narrative_coherence` | 章节之间的过渡是否符合教学递进；前一 scene 留下的悬念是否被下一 scene 拾起 | 章节像独立短片随机拼接 | 像一段连续讲解，承接关系明确 |
+| `narrative_coherence` | 章节之间的过渡是否符合叙事递进；前一 scene 留下的悬念是否被下一 scene 拾起 | 章节像独立短片随机拼接 | 像一段连续叙事，承接关系明确 |
 | `symbol_consistency` | 同一符号 / 变量 / 颜色编码在不同 scene 中是否保持一致 | 同一 Q 矩阵换三种颜色三种字体 | 全片符号 / 颜色 / 标记体系自洽 |
 
 实施约束：
 - 这两维**只对** `source_type=full_paper` 样本生效；scene-local 样本不评（避免对单 scene 任务硬塞跨 scene 指标）
 - VLM 评分时需输入**整片视频的关键帧 montage**（所有 scene 各抽 1-2 帧拼接），而非单 scene 4 帧——这要求 `paper2manim/utils/frame_sampler.py` 增加 `whole_video_montage` 模式
-- §5 把 `full_paper` 截成 "abstract+intro+conclusion 三段" 是为绕 recursion limit 的工程妥协；引入这两维后**必须改回完整论文**作为评测输入——否则评 `narrative_coherence` 没意义。length cap 8K 是 storyboarder 的输入上限，不应反过来截 paper
+- §4 把 `full_paper` 截成 "abstract+intro+conclusion 三段" 是为绕 recursion limit 的工程妥协；引入这两维后**必须改回完整论文**作为评测输入——否则评 `narrative_coherence` 没意义。length cap 8K 是 storyboarder 的输入上限，不应反过来截 paper
+
+⚠️ **样本量要求**：narrative_coherence / symbol_consistency 两维要做出"preset A vs C 在 full_paper 上有显著差异"的统计结论（paired t-test p<0.05、效应量 Cohen's d>0.5），按经验估算需要 `full_paper` ≥ **60 条**样本。发布版若只到 30 条，论文中需明确标注为 **secondary RQ**，不参与主结论。
 
 ---
 
@@ -158,6 +176,8 @@ P2M-Bench **不提供** "唯一标准 Manim 视频"。它提供的是：
 | VLM 平均分 | 三维维度定义 | `evaluation_rubric` 三维 |
 | Human-VLM 一致性 | 同维度的人类分 | sidecar `human_scores/<id>.json` |
 | Domain-Transfer Gain | domain 标签 + 训/测划分 | `domain` × `split` |
+
+⚠️ **`Pass@1` 阈值不能拍脑袋**：表中 `avg≥85` 只是占位默认值。投稿前需做 **calibration**——抽 30 条"勉强合格 / 勉强不合格"边界视频做人工二元标注，逻辑回归出 ROC 最佳阈值并写入论文 §8.2 脚注；或者直接放弃单一阈值口径，**报三维分布**（mean ± std + p90）作为更稳健的替代。
 
 ### 2.3 与 EMB 字段对齐（proposal §4.4）
 
@@ -226,70 +246,7 @@ proposal §4.4 的 EMB 不只是黑盒——它会暴露 `hit_count / last_used 
 
 ---
 
-## 4. 与当前 `p2m_v1.csv` 的关系（迁移路径）
-
-### 4.1 字段差异
-
-| 现 `p2m_v1.csv` | P2M-Bench | 处理 |
-|---|---|---|
-| `arxiv_id` | `paper_id` | 直接重命名 |
-| `section` | `target_unit.anchor.section` + `target_unit.title` | 拆 |
-| `domain` | `domain` | 不动 |
-| `split ∈ {bootstrap, eval, cross_train, cross_test}` | `split ∈ {dev, test, hard_test, human_gold}` | 见映射表 |
-| `expected_scene_count_min` | 删（用 `num_reference_scenes` 替） | — |
-| — | `category / source_type / main_topics / key_claims / ...` | 新增 |
-
-### 4.2 split 映射
-
-| 现 split | 新 split | 备注 |
-|---|---|---|
-| `bootstrap` | `dev`（前 50–100 条） | `scripts/run_experiment.py` 用 task_idx 切片标记 bootstrap 段 |
-| `eval` | `dev`（其余） | 同上，bootstrap 之后即稳态评估段 |
-| `cross_train` | `dev`（domain=cs/math 的子集） | 训练域，与上面同表，不再单列 |
-| `cross_test` | `hard_test` | 直接重命名 |
-
-⚠️ `paper2manim/datasets/constants.py::SPLITS` 与 `--dataset-domain` 的 click.Choice 列表需同步更新，相关 8 条测试（`tests/test_cross_domain_and_dataset.py`）会失败，需补 fixture。
-
-### 4.3 实施清单（最终版，一步到位）
-
-**Code 改动**：
-- 新增 `paper2manim/datasets/schema.py`（Pydantic v2 model 描述 §1.4 完整 JSON；含 `target_unit.type` 与 `target_unit.anchor` 字段集的一致性校验）
-- 新增 `paper2manim/datasets/loader.py`：从 parquet / 多文件 jsonl 加载，对 `split ∈ {dev, test, hard_test}` 自动剥离 `reference_scene_plan` / `key_claims` / `common_misunderstandings` / `evaluation_rubric` 整条；只在 `mode="evaluation"` 显式调用时返回完整记录
-- 更新 `paper2manim/datasets/constants.py`：`SPLITS = ("dev", "test", "hard_test", "human_gold")`；`DOMAINS` 不变
-- 扩展 `paper2manim/parsers/arxiv_source.py`：实现 §5 表里 5 种 extractor（`extract_equation` / `extract_figure` / `extract_table` / `extract_algorithm` / `extract_full_paper`）
-- 扩展 CLI：`paper2manim mvp2 --task <record.json>` 是新的主入口，所有 `source_type` 走同一路径；旧 `--arxiv / --section` 作 subsection 简写保留
-- 新增 `paper2manim/utils/frame_sampler.py::whole_video_montage`，用于 `source_type=full_paper` 样本的 cross-scene VLM 评分
-- 新增 `paper2manim/agents/full_paper_vlm_reviewer.py`：在三维基础上额外评 `narrative_coherence` + `symbol_consistency`（§1.6）
-- 新增 `scripts/score_against_rubric.py`：把 trace 中的 VLM 分与样本 `evaluation_rubric` 对齐打分
-- 新增 `scripts/emb_health_report.py`：输出 §2.6 五项指标，写入 `docs/emb-health-report.md`
-
-**数据标注（300 条目标）**：
-- Split 分布：`dev=150 / test=50 / hard_test=50 / human_gold=100`（`human_gold` 与前三 split 重叠，按 domain × source_type 分层抽样）
-- Domain 分布：`cs ≥ 80 / math ≥ 60 / physics ≥ 50 / quantum ≥ 50 / econ ≥ 30`（quantum/econ 仅出现在 `hard_test`，承担 RQ3 跨域）
-- Source_type 分布：`subsection ≥ 100 / equation ≥ 60 / figure ≥ 40 / algorithm ≥ 40 / table ≥ 30 / full_paper ≥ 30`
-- 每条样本附 `annotation_log.jsonl`（双标 + 仲裁记录，见 §6.2）
-- `human_gold` 100 条按 `human_scores/<id>.json` sidecar 单独存（3 维 × 0-100 × ≥2 标注者）
-
-**测试覆盖**：
-- `tests/test_p2m_bench_schema.py`：Pydantic 校验（missing required field / 未知 enum / `target_unit.type` 与 `anchor` 字段集一致性）
-- `tests/test_p2m_bench_loader.py`：§6.4 的 4 条红线单测
-- `tests/test_emb_health_report.py`：五项指标算法正确性 + 边界情况（空 EMB / 单条 EMB）
-- `tests/test_score_against_rubric.py`：rubric ↔ score sidecar 读写、维度对齐
-
-**发布**：
-- HuggingFace 数据集 `Paper2Manim/p2m-bench`：主表 parquet + `papers/<paper_id>.txt` 全文 sidecar + `human_scores/<id>.json` + `annotation_log/<id>.jsonl`
-- HF dataset card：§1.4 完整 schema + §2 RQ 映射表 + §6 标注流程 + §2.4 ⚠️ 红线声明
-- 仓库 `examples/datasets/p2m_v1.csv` 删除，由 `paper2manim/datasets/loader.py` 直接读 HF
-
-**实验闭环（投稿前要全部跑完）**：
-- RQ1 Hero Plot：`A/B/C × ≥3 seeds × dev 150 条`，写 `docs/hero-plot.md`
-- RQ2 VLM-Human 一致性：`human_gold` 100 条 × Pearson r + Spearman ρ + Cohen's κ，写 `docs/rq2-vlm-human.md`
-- RQ3 跨域：cs/math 上 train EMB → frozen-EMB 在 quantum/econ `hard_test` 50 条上 test，写 `docs/rq3-cross-domain.md`
-- 五个 ablation（A/B/C/D/E）：全在 `dev` 150 条上跑，写 `docs/ablations.md`
-
----
-
-## 5. CLI 与 parser 的扩展点
+## 4. CLI 与 parser 的扩展点
 
 当前 `paper2manim mvp2 --arxiv ID --section NAME` 只覆盖 `source_type=subsection`。其余 5 种 `source_type` 需要：
 
@@ -306,7 +263,6 @@ proposal §4.4 的 EMB 不只是黑盒——它会暴露 `hit_count / last_used 
 
 ---
 
+## 5. 一句话总结
 
-## 6. 一句话总结
-
-> P2M-Bench 把 `(arxiv_id, section)` 升级为 `(整篇论文, 待讲解 target_unit, 关键知识点, 评测 rubric, 参考分镜)` 五元组，让一份数据同时驱动 proposal 的 RQ1 主曲线、RQ2 人工一致性、RQ3 跨域泛化与全部五个 ablation；同时通过 loader 层的物理字段隐藏（§2.4 红线 + §6.4 单测兜底），保证 EMB 自学习的洁癖（proposal §4 / §10 的核心区分点）不被新引入的 ground truth 字段破坏。`full_paper` 样本额外引入 narrative_coherence + symbol_consistency 两维评跨 scene 衔接（§1.6）；EMB 健康度评测（§2.6）与 Hero Plot 正交共用同一份实验数据；标注流程与 IAA 口径（§6）封死评委两个常见拒稿理由。
+> P2M-Bench 把 `(arxiv_id, section)` 升级为 `(整篇论文, 待可视化 target_unit, 关键信息点, 评测 rubric, 参考分镜)` 五元组，让一份数据同时驱动 proposal 的 RQ1 主曲线、RQ2 人工一致性、RQ3 跨域泛化与全部五个 ablation；同时通过 loader 层的物理字段隐藏（§2.4 红线），保证 EMB 自学习的洁癖（proposal §4 / §10 的核心区分点）不被新引入的 ground truth 字段破坏。`full_paper` 样本额外引入 narrative_coherence + symbol_consistency 两维评跨 scene 衔接（§1.6）；EMB 健康度评测（§2.6）与 Hero Plot 正交共用同一份实验数据。
