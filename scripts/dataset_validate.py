@@ -1,4 +1,4 @@
-"""Validate a Paper2Manim task dataset CSV against the v1 schema.
+"""Validate a Paper2Manim task dataset CSV against the lightweight schema.
 
 Schema reference: ``examples/datasets/p2m_v1_schema.md``.
 
@@ -11,11 +11,15 @@ Outputs (next to the input file):
 - ``<csv>.validated.csv`` — only the rows that passed
 - ``<csv>.errors.txt`` — one line per failed row with reason
 
-In ``--offline`` mode only schema-level checks run (column presence, enum membership,
-int parse). With network, each row's ``arxiv_id``/``section`` is also probed via
-``parse_arxiv``; ``SourceUnavailable`` is recorded as ``unreachable`` and is *not*
-treated as a hard failure (those rows are still emitted to the validated set so the
-user can decide).
+In ``--offline`` mode only schema-level checks run (column presence, enum
+membership, int parse). With network, each row's ``arxiv_id``/``section`` is
+also probed via ``parse_arxiv``; ``SourceUnavailable`` is recorded as
+``unreachable`` and is *not* treated as a hard failure (those rows are still
+emitted to the validated set so the user can decide).
+
+The canonical P2M-Bench v2 splits are ``memory_build``, ``fixed_probe``,
+``test_holdout``, ``cross_train``, and ``cross_test``. Legacy aliases
+``bootstrap`` and ``eval`` remain valid for existing runner CSVs.
 """
 
 from __future__ import annotations
@@ -27,12 +31,16 @@ from pathlib import Path
 
 # Single source of truth — also imported by ``paper2manim/cli.py`` as the
 # ``--dataset-domain`` ``click.Choice`` enumeration. Keep these in lockstep.
+from paper2manim.datasets import CANONICAL_SPLITS as _CANONICAL_SPLITS_TUPLE
 from paper2manim.datasets import DOMAINS as _DOMAINS_TUPLE
+from paper2manim.datasets import LEGACY_SPLIT_ALIASES as _LEGACY_SPLIT_ALIASES
 from paper2manim.datasets import SPLITS as _SPLITS_TUPLE
 from paper2manim.datasets import strip_comment_lines as _strip_comment_lines
 
 _DOMAINS = set(_DOMAINS_TUPLE)
 _SPLITS = set(_SPLITS_TUPLE)
+_CANONICAL_SPLITS = set(_CANONICAL_SPLITS_TUPLE)
+_SPLIT_ALIASES = dict(_LEGACY_SPLIT_ALIASES)
 _REQUIRED_COLS = ("arxiv_id", "section", "domain", "split")
 
 

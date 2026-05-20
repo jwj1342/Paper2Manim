@@ -1,0 +1,12 @@
+# Paper2Manim task pool v2 minimal sample
+# Schema: examples/datasets/p2m_v1_schema.md
+# Columns: id,arxiv_id,section,domain,split,stream_idx,probe_idx,scene_role,category,difficulty,expected_scene_count_min,human_eval_candidate
+id,arxiv_id,section,domain,split,stream_idx,probe_idx,scene_role,category,difficulty,expected_scene_count_min,human_eval_candidate
+1706_03762_background,1706.03762,Background,cs,memory_build,0,,BACKGROUND,Concept,easy,2,false
+1706_03762_method,1706.03762,Method,cs,memory_build,1,,METHOD,Algorithm,medium,3,true
+1810_04805_introduction,1810.04805,Introduction,cs,memory_build,2,,BACKGROUND,Concept,easy,2,false
+1412_6980_algorithm,1412.6980,Algorithm,math,memory_build,3,,METHOD,Algorithm,medium,2,true
+1502_03167_algorithm,1502.03167,Algorithm,math,fixed_probe,,0,METHOD,Algorithm,medium,2,true
+0710_1538_introduction,0710.1538,Introduction,math,fixed_probe,,1,BACKGROUND,Concept,easy,2,true
+1503_02531_introduction,1503.02531,Introduction,physics,test_holdout,,,BACKGROUND,Concept,easy,2,false
+quant_ph_0508027_introduction,quant-ph/0508027,Introduction,quantum,cross_test,,0,BACKGROUND,Concept,easy,2,true

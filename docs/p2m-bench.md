@@ -1,275 +1,387 @@
-# P2M-Bench: Dataset Design for Paper2Manim
+# P2M-Bench v2: Dataset Design for the EMB Snapshot Experiment
 
-## 1. 数据集结构
+P2M-Bench v2 is a compact paper-section task stream for evaluating whether self-grown EMB reduces cross-task forgetting in Paper2Manim. The dataset separates a `memory_build` stream, used only to grow and snapshot the EMB, from a `fixed_probe` set, used for read-only evaluation of VLM Reflection Only and frozen EMB snapshots. The primary evidence is blind human scoring of first-attempt outputs, reported as Human Pass@1 and Human Quality Score, together with trace-derived Reflection Depth. Evaluation-only fields such as key claims, reference scene plans, task rubrics, and human scores are physically isolated from model inputs and EMB writes, ensuring that any observed improvement comes from self-grown memory rather than human-provided answers.
 
-### 1.1 两层结构：paper context + target_unit
+## 1. Core Experimental Claim
 
-每条样本以 `(paper_id, target_unit)` 为主键。同一篇论文可派生多条局部任务，例如 *Attention Is All You Need* 可派生 `Scaled Dot-Product Attention`、`Multi-Head Attention`、`Architecture Figure` 三条。模型生成时只拿到：
+The dataset supports a narrow method claim:
+
+> ManimAgent reduces cross-task forgetting by accumulating a self-grown dual-channel Episodic Memory Bank (EMB). As EMB snapshots become larger and more mature, the same VLM-reflection pipeline should produce better first-attempt paper-section animations: higher Human Pass@1, lower Reflection Depth, and higher Human Quality Score.
+
+P2M-Bench v2 is therefore not framed as a broad visual education benchmark. It is a paper-section animation task stream for measuring first-attempt usability, paper alignment, visual robustness, and animation flow under controlled EMB snapshot conditions.
+
+## 2. Main Experiment
+
+### 2.1 Systems
+
+The baseline is VLM Reflection Only:
 
 ```text
-paper_full_text
-+ target_unit
-+ scene_role
-+ domain / source_type 等非答案型元数据
-+ required_prior_context（仅在需要前置视觉状态时）
+B = VLM Reflection Only
+    --vlm --no-emb
 ```
 
-这一结构与 `PaperState` 基本对齐：`paper_full_text` 对应 `state["full_text"]`，`target_unit` 对应当前可视化任务。`main_topics`、`key_claims`、`reference_scene_plan`、完整 rubric 等字段只属于评测 / 展示端，不能进入模型输入或 EMB。
+The treatment systems use frozen EMB snapshots:
 
-### 1.2 主表字段（HuggingFace parquet）
+```text
+C@K = VLM Reflection + frozen EMB snapshot with K records
+      --vlm --emb --emb-readonly --emb-store-path <snapshot_K>
+```
 
-| 字段 | 类型 | 必填 | 含义 |
-|---|---|---|---|
-| `id` | str | 是 | `<paper_id>_<unit_kind>_<unit_index>`，主键 |
-| `category` | enum | 是 | `Concept / Equation / Algorithm / Figure / Architecture / Experiment` |
-| `domain` | enum | 是 | `cs / math / physics / quantum / econ` |
-| `paper_id` | str | 是 | arXiv id（兼容 `hep-th/9901001` 旧式 id）或本地 PDF SHA-1 |
-| `paper_title` | str | 是 | 论文标题 |
-| `paper_publish_date` | date | 是 | 数据污染分析用；`cross_domain` / `test` 优先采用 2025-01 之后发表的论文 |
-| `paper_license` | str | 是 | arXiv / publisher license；用于 HF dataset card 和分发权说明 |
-| `paper_full_text` | str | 是 | 清洗后的论文文本；LaTeX 优先，回退 Marker PDF |
-| `target_unit` | struct | 是 | 见 [§1.3](#13-target_unit-结构) |
-| `source_type` | enum | 是 | 主论文使用 `section`；扩展支持 `subsection / equation / figure / table / algorithm / full_paper` |
-| `scene_role` | enum | 是 | `BACKGROUND / METHOD / EXPERIMENT / CONCLUSION`；对齐论文中的 task role `r`，也进入 EMB embedding |
-| `track` | enum | 是 | `local / global`；Hero Plot 主干只使用 `track=local`，`global` 独立成次要 track |
-| `main_topics` | list[str] | 是 | 3-5 个核心知识点；评测 / 展示字段，不进入 Storyboarder prompt 或 EMB query |
-| `split` | enum | 是 | `bootstrap / steady_state / cross_domain / test` |
-| `is_human_gold_candidate` | bool | 否 | 是否可进入 output-level human scoring sidecar；不是 task split |
-| `task_idx` | int | stream only | 主论文唯一冻结任务序号；A/B/C 配置必须共用 identical task stream |
-| `task_idx_easy` | int | optional | 附录 curriculum 轨迹，按 `easy_to_hard` 冻结 |
-| `task_idx_blocked` | int | optional | 附录领域分块轨迹；先跑一个领域再切到另一个领域，用于展示 domain shift |
-| `task_idx_interleaved` | int | optional | 附录鲁棒性轨迹；按 `(domain, source_type)` stratified shuffle 冻结 |
-| `difficulty` | enum | 是 | `easy / medium / hard`，用于分层报告 |
-| `isomorphic_pair_id` | str \| null | 否 | 跨域同构任务对 id；方法论文正文展示 5-10 对 qualitative cases |
-| `isomorphism_type` | enum \| null | 否 | `full / partial`；至少 1/3 为 `partial`，避免过干净的 cherry-pick |
+Main snapshot sizes:
 
-`category` 表示可视化意图，`source_type` 表示原文形态。二者不是 1:1：例如 Transformer 架构图可同时是 `source_type=figure` 与 `category=Architecture`。
+```text
+EMB@0
+EMB@50
+EMB@100
+EMB@200
+EMB@400
+```
 
-### 1.3 `target_unit` 结构
+`K` is the number of consolidated EMB records, not necessarily the number of processed tasks.
+
+### 2.2 Flow
+
+Step A: Memory build
+
+- Run ManimAgent on `split=memory_build` tasks.
+- EMB writes are enabled.
+- Save EMB snapshots when record count reaches `K in {0, 50, 100, 200, 400}`.
+
+Step B: Fixed probe evaluation
+
+- Run all systems on the same `split=fixed_probe` tasks.
+- Snapshot systems use read-only memory with `--emb-readonly`.
+- No probe output may be consolidated back into the snapshot.
+
+Step C: Human evaluation
+
+- Score first-attempt outputs from `B`, `C@0`, `C@100`, and `C@400`.
+- Add `C@50` and `C@200` if annotation budget allows.
+- Raters are blind to system condition.
+- Conditions should contain the same fixed-probe task ids whenever possible.
+
+### 2.3 Metrics
+
+Primary metrics:
+
+| metric | source | definition |
+|---|---|---|
+| `Human Pass@1` | human sidecar | Majority vote over `human_pass_at_1` on first-attempt outputs. |
+| `Reflection Depth` | run trace | Mean number of revision/reflection rounds before pass or convergence. |
+| `Human Quality Score` | human sidecar | Mean of five human dimensions. |
+
+Auxiliary metrics:
+
+| metric | source | definition |
+|---|---|---|
+| `VLM Quality Score` | run trace | Diagnostic only; not primary quality evidence. |
+| `VLM-Human Agreement` | trace + sidecar | Pearson/Spearman for scores; kappa for pass/fail. |
+| `Failure Flag Frequency` | human sidecar | Frequency of fatal or recurrent failure categories. |
+| `Snapshot Size` | snapshot manifest | Number of consolidated EMB records. |
+
+VLM score is auxiliary because the VLM is also used inside the system for revision and memory consolidation.
+
+## 3. Task Table
+
+The main table should be usable as a HuggingFace parquet schema and as a lightweight CSV for current runners.
+
+### 3.1 Minimal CSV Schema
+
+The runner-compatible CSV keeps a small required surface:
+
+| column | type | required | notes |
+|---|---|---:|---|
+| `id` | str | recommended | Stable task id. If missing, derive from `arxiv_id + section`. |
+| `arxiv_id` | str | yes | Bare arXiv id, e.g. `1706.03762`. |
+| `section` | str | yes | Exact or near-exact section title passed to `paper2manim mvp2 --section`. |
+| `domain` | enum | yes | `cs / math / physics / quantum / econ` initially. |
+| `split` | enum | yes | v2 split name or supported legacy alias. |
+| `expected_scene_count_min` | int | optional | Sanity floor only. |
+
+Recommended extra CSV columns for v2 experiment planning:
+
+```text
+stream_idx
+probe_idx
+scene_role
+category
+difficulty
+human_eval_candidate
+```
+
+### 3.2 Canonical Splits
+
+| split | purpose |
+|---|---|
+| `memory_build` | Ordered stream used to grow EMB and save snapshots. |
+| `fixed_probe` | Held-out tasks used for read-only evaluation of baseline and snapshots. |
+| `test_holdout` | Reserved final set; do not tune on it. |
+| `cross_train` | Optional appendix: grow EMB on one domain. |
+| `cross_test` | Optional appendix: frozen cross-domain probe. |
+
+Legacy aliases are allowed for current lightweight scripts:
+
+| legacy split | canonical split |
+|---|---|
+| `bootstrap` | `memory_build` |
+| `eval` | `fixed_probe` |
+| `cross_train` | `cross_train` |
+| `cross_test` | `cross_test` |
+
+Documentation, figures, and new dataset releases should use `memory_build` and `fixed_probe`.
+
+### 3.3 Full Parquet Fields
+
+| field | type | required | visibility | purpose |
+|---|---|---:|---|---|
+| `id` | str | yes | model/eval | Stable task id. |
+| `paper_id` | str | yes | model/eval | Same as arXiv id or local PDF SHA. |
+| `arxiv_id` | str | yes for arXiv | model/eval | CLI-compatible id. |
+| `paper_title` | str | yes | model/eval | Display and annotation context. |
+| `paper_publish_date` | date | yes | eval metadata | Contamination analysis. |
+| `paper_license` | str | yes | release metadata | Dataset card/license. |
+| `paper_full_text` | str | yes in parquet | model input | Cleaned paper text. |
+| `target_unit` | struct | yes | model/eval | Local paper unit to animate. |
+| `section` | str | yes in CSV | model/eval | CLI section selector. |
+| `source_type` | enum | yes | model/eval | Main experiment: `section`. |
+| `category` | enum | yes | eval stratification | `Concept / Equation / Algorithm / Figure / Architecture / Experiment`. |
+| `scene_role` | enum | yes | model/eval | `BACKGROUND / METHOD / EXPERIMENT / CONCLUSION`. |
+| `domain` | enum | yes | model/eval | Used by CLI `--dataset-domain` and EMB context. |
+| `difficulty` | enum | yes | eval stratification | `easy / medium / hard`. |
+| `track` | enum | yes | eval filter | Main experiment uses `local`. |
+| `split` | enum | yes | runner/eval | `memory_build / fixed_probe / test_holdout / cross_train / cross_test`. |
+| `stream_idx` | int/null | required for `memory_build` | runner/eval | Frozen order for memory-building stream. |
+| `probe_idx` | int/null | required for `fixed_probe` | runner/eval | Frozen order for probe evaluation. |
+| `human_eval_candidate` | bool | yes | eval sampling | Eligible for human scoring. |
+| `main_topics` | list[str] | yes | eval-only | Rater aid; never model input. |
+| `key_claims` | list[str] | yes | eval-only | Rater aid; never model input. |
+| `reference_scene_plan` | list[object] | yes | eval-only | Rater aid; not a mandatory script. |
+| `human_rubric` | object | yes | eval-only | Task-specific scoring reminders. |
+| `contamination_group` | enum/null | optional | eval | `pre_cutoff / post_cutoff / unknown`. |
+| `notes` | str | optional | eval | Annotation notes. |
+
+`category` describes the intended animation content. `source_type` describes the paper artifact. In the main experiment, `source_type=section`, `target_unit.type=section`, and `track=local`.
+
+### 3.4 `target_unit`
 
 ```json
 {
-  "title": "Scaled Dot-Product Attention",
-  "text": "<原文摘录, <=4K chars>",
-  "type": "section | subsection | equation | figure | table | algorithm | full_paper",
+  "title": "Section 3.2.1 Scaled Dot-Product Attention",
+  "text": "<target excerpt, <= 4000 chars>",
+  "type": "section",
   "anchor": {
     "section": "3.2.1",
-    "equation_label": "eq:scaled-dot",
-    "figure_label": "fig:transformer-arch",
-    "page": 3
+    "equation_label": null,
+    "figure_label": null,
+    "page": null
   },
   "required_prior_context": "",
   "prior_objects": []
 }
 ```
 
-`anchor` 字段均为 optional，按 `type` 取需要的子集。主论文实验只要求 `type=section` 且文本长度 `<=4K chars`；其它类型用于后续更细粒度 benchmark。`required_prior_context` 和 `prior_objects` 只在 `algorithm` 或多 scene 片段需要前置视觉状态时填写，用来避免模型因缺失上下文而被错误扣分；普通 section / subsection / equation 可留空。
+CSV maps `section` to `target_unit.title` or `target_unit.anchor.section`, depending on the loader. For the main experiment, `target_unit.text <= 4000 chars`. `full_paper` remains outside the main experiment and may be documented only as an appendix extension.
 
-### 1.4 每条样本的完整标注
+## 4. Field Isolation
 
-```json
-{
-  "id": "1706.03762_method_3_2_1",
-  "category": "Concept",
-  "domain": "cs",
-  "split": "steady_state",
-  "is_human_gold_candidate": true,
-  "task_idx": 12,
-  "task_idx_easy": 12,
-  "task_idx_blocked": 31,
-  "task_idx_interleaved": 47,
-  "difficulty": "medium",
-  "scene_role": "METHOD",
-  "paper_id": "1706.03762",
-  "paper_title": "Attention Is All You Need",
-  "paper_publish_date": "2017-06-12",
-  "paper_license": "arXiv.org perpetual, non-exclusive license",
-  "track": "local",
-  "target_unit": {
-    "title": "Section 3.2.1 Scaled Dot-Product Attention",
-    "text": "We call our particular attention 'Scaled Dot-Product Attention' ...",
-    "type": "section",
-    "anchor": { "section": "3.2.1" },
-    "required_prior_context": "",
-    "prior_objects": []
-  },
-  "isomorphic_pair_id": null,
-  "isomorphism_type": null,
-  "main_topics": ["QK^T", "softmax scaling", "weighted sum"],
-  "key_claims": [
-    "QK^T measures pairwise similarity between queries and keys",
-    "Scaling by sqrt(d_k) prevents softmax saturation at large d_k",
-    "The output is a weighted sum of V with weights from softmax"
-  ],
-  "reference_scene_plan": [
-    { "beat": "Show Q, K, V as three colored matrix blocks" },
-    { "beat": "Compute QK^T, visualize as similarity heatmap" },
-    { "beat": "Divide by sqrt(d_k), highlight scaling effect on softmax" },
-    { "beat": "Apply softmax, then weight-sum with V" }
-  ],
-  "evaluation_rubric": {
-    "logic_flow": ["Beats appear in causal order"],
-    "layout_occlusion": ["Matrices are labeled and non-overlapping"],
-    "accuracy": ["softmax denominator is sqrt(d_k), not d_k"]
-  }
-}
-```
+Strict field isolation is part of the experimental design.
 
-`key_claims`、`evaluation_rubric`、`reference_scene_plan` 由研究生标注者独立完成；LLM 只能作为草标助手，所有 LLM 草标必须经至少两名人工逐条 review 后进入 ground truth。
+### 4.1 Model-Visible Fields
 
-### 1.5 Ground truth 的边界
-
-P2M-Bench 不提供唯一标准 Manim 视频。它提供的是论文理解材料、局部可视化锚点、关键信息点、参考分镜和评分 rubric。
-
-`reference_scene_plan` 的 storyboard 对齐度作为独立指标报告，不进入 `Pass@1` 阈值。正文可用一句话描述为：weighted sum of order alignment (Kendall tau) and embedding similarity (Hungarian matching)。具体权重、embedding 模型和实现细节放附录或 release notes。
-
-### 1.6 `full_paper` 的独立 track
-
-`source_type=full_paper` 与 paper-section、equation、figure、algorithm 等局部任务不是同质样本。它要求模型把整篇论文压成多 scene 叙事，失败模式会混入 context overflow、长程规划衰减、渲染超时等因素。为避免 Hero Plot 被这种异类任务放大噪声，主实验约束为：
-
-- Track 1: Local Tasks。主论文只使用 paper-section tasks；equation、figure、algorithm、table、subsection 是兼容扩展，承载 RQ1 Hero Plot 与 RQ3 跨域实验时必须保持同一任务粒度。
-- Track 2: Global Narrative。仅包含 `source_type=full_paper`，作为次要实验或 future work；若报告，只在冻结 EMB 后做 zero-shot，单独列结果。
-
-`global` track 暂不定义 `narrative_coherence` / `symbol_consistency` 等专属评分维度。方法论文正文只需说明 global narrative generation 的设置与局限，完整长视频 benchmark 留给后续工作。
-
-## 2. 实验需求映射
-
-### 2.1 RQ × 字段映射
-
-| Proposal | 需要的数据信号 | P2M-Bench 字段 |
-|---|---|---|
-| RQ1 Hero Plot | 有序 paper-section 任务流 | `split=steady_state`, `track=local`, `task_idx` |
-| RQ1 bootstrap regime | EMB 为空时的预热流 | `split=bootstrap`, `task_idx` |
-| RQ1 domain shift 副图 | 领域切换点明确的任务流 | optional `task_idx_blocked` |
-| RQ1 鲁棒性附录 | 嘈杂任务流 | optional `task_idx_interleaved` |
-| RQ2 VLM-Human 一致性 | 100 个 converged videos，三名专家逐维打分 | output-level sidecar `human_scores` |
-| RQ2 维度对齐 | Logic / Layout / Accuracy 共用维度 | `evaluation_rubric` |
-| RQ3 跨域泛化 | Domain A steady-state EMB → Domain B held-out set | `domain` + `split=cross_domain` |
-| RQ3 structure mapping 案例 | 少量同构任务对 | `isomorphic_pair_id` |
-| Ablations A-E | 同任务集多配置复跑 | `id`, `split`, runner preset |
-
-主论文 Figure 3 使用单一 frozen task stream，A/B/C 配置必须共享 identical task stream。三条 curriculum 共用同一批样本，不增加标注成本，但属于附录鲁棒性分析：`task_idx_blocked` 用于展示领域切换后的 zero-shot 跃升或退化，`task_idx_interleaved` 用于报告嘈杂任务流下的稳定性，不能替代主论文的 `task_idx`。
-
-同构任务对用于回应“跨域提升是否只是复用了代码片段”的质疑。dataset 维护一小组跨域同构案例，至少包含若干部分同构样本，方法论文正文展示 5-10 对案例和一张小表，不把它扩展成完整 benchmark 结论。
-
-### 2.2 数据污染缓解
-
-arXiv 论文很可能进入主流 LLM 预训练语料，P2M-Bench 必须显式报告污染风险。`cross_domain` / `test` 优先采用 2025-01 之后发表的论文，并通过 `paper_publish_date` 字段按 cutoff 前后分层报告结果。所有主表样本保留发表日期，论文正文需说明该策略只能缓解预训练污染，不能证明模型完全未见过论文内容。
-
-### 2.3 与 EMB 字段对齐
-
-P2M-Bench 字段可以映射到 EMB `Context`，让检索使用任务元数据加权：
-
-| P2M-Bench | EMB `Context` |
-|---|---|
-| `target_unit.text` | `task_text` |
-| `scene_role` | `scene_role` |
-| `target_unit.type` | `scene_role` 的补充粒度，不替代主论文 role |
-| `domain` | `domain_tags` |
-| `paper_id` | `source_paper` |
-| `target_unit.anchor.section` | `source_section` |
-
-严禁把 `main_topics`、`key_claims`、`reference_scene_plan` 或 rubric 细则写入 EMB。它们是评测端 ground truth / 展示字段，进入检索会污染 RQ1 和 RQ3。
-
-### 2.4 Loader 红线
-
-实验 loader 必须物理隐藏评测字段。模型侧只暴露：
+Only these fields may enter the model prompt, Storyboarder, Coder, VLM reflection context, or EMB query:
 
 ```text
 paper_full_text
-target_unit
+target_unit.title
+target_unit.text
+target_unit.type
+target_unit.anchor
+target_unit.required_prior_context
+target_unit.prior_objects
 scene_role
-domain/source_type 等非答案型元数据
-required_prior_context（仅在需要前置视觉状态时）
+domain
+source_type
+paper_title
 ```
 
-评测侧才可读取：
+### 4.2 Evaluation-Only Fields
+
+These fields are evaluation-only and must never enter model input or EMB:
 
 ```text
 main_topics
 key_claims
 reference_scene_plan
-evaluation_rubric
+human_rubric
 human_scores
+human_pass
+fatal_flags
+human_quality_score
 ```
 
-这条约束是本文与人工种子 skill-library 工作区分的关键：EMB 只能由系统在任务流上自学习生成，不能预置人工分镜或答案。
+This rule is critical: the paper's claim is self-grown memory. EMB must be produced by the system's own task stream, not by human-provided answer fields.
 
-### 2.5 指标口径
+### 4.3 EMB Context Mapping
 
-| 指标 | 数据集提供 | 备注 |
-|---|---|---|
-| Task-level Pass@1 | 每个 task 的首轮 attempt trace + VLM 三维分 | 若首轮 attempt 的聚合 VLM 分数 `>= θpass`，该 task 记为 Pass@1；`θpass` 是报告指标阈值 |
-| L-Pass@1 | `task_idx` + sliding window + task-level Pass@1 | 按最近 `w` 个 task 的 Pass@1 均值随累计任务数作图；bootstrap 单独报告，不进 headline steady-state window |
-| Pass@K | `id` + reflection trace | 最多 `Tmax=5` 轮 |
-| 平均反思轮数 | `id` | runner trace 统计 |
-| VLM 平均分 | `evaluation_rubric` 三维 | Logic / Layout / Accuracy |
-| Human-VLM 一致性 | sidecar `human_scores` | Pearson / Spearman / Cohen's kappa |
-| Domain-Transfer Gain | `domain` x `split` | `cross_domain` 中比较 frozen EMB vs no EMB；可按 cutoff 前后和 difficulty 分层报告 |
-| Human Ceiling | 20 条小样本专家完成任务 | 附录报告人类 Pass@1 / 三维均分 |
+Only safe fields map into EMB context:
 
-主论文草稿中 `θwrite=90` 用于 convergence 和 EMB 写入门槛；它不必与 `θpass` 绑定。若论文决定沿用同一数值，应写成 `θpass=θwrite=90`；若后续做人类校准，则只调整 `θpass`，不改变 EMB 写入门槛。
+| dataset field | EMB context |
+|---|---|
+| `target_unit.text` | `task_text` |
+| `scene_role` | `scene_role` |
+| `domain` | `domain_tags` |
+| `paper_id` / `arxiv_id` | `source_paper` |
+| `target_unit.anchor.section` | `source_section` |
 
-EMB 健康度指标属于方法评估章节，不放在 dataset doc 主体中。
+Never write `key_claims`, `reference_scene_plan`, `human_rubric`, fatal flags, or human scores into EMB.
 
-## 3. Split 定义
+## 5. Human Scoring Sidecar
 
-| Split | 规模 | 用途 |
-|---|---:|---|
-| `bootstrap` | 50-100 | EMB 为空的预热流；单独报告，不进入 headline L-Pass@1 |
-| `steady_state` | ~150 | Hero Plot 主曲线；仅 `track=local`，A/B/C 共用 identical task stream |
-| `cross_domain` | 50 | Domain B held-out set；quantum / microeconomics 等未见域 |
-| `test` | 50 | 最终保留集，不调参 |
+Human scoring is output-level, not task-level. Store it in a separate JSONL or parquet sidecar with one row per `(output_id, rater_id_hash)`.
 
-`human_gold` 不是 task split，而是 generated output 的标注子集。主论文协议从 converged videos 中按 configuration × domain 分层抽样 100 条，由三名数学或计算机教师沿 Logic Flow / Layout-Occlusion / Accuracy 三轴独立盲评，并计算 Pearson / Spearman / Cohen's kappa。
+### 5.1 Scored Outputs
 
-为避免 ceiling effect，human scoring sidecar 必须为入选任务保存 `attempt_0`、`attempt_mid`、`attempt_final` 三阶段视频和逐维人工分数。主论文 Table 5 仍报告 converged videos；附录报告三阶段 attempt 相关性，展示 VLM-Human 一致性是否覆盖失败、中间态和收敛态。
+The primary human evaluation scores first-attempt videos. Final converged outputs are optional appendix material, because the main claim is that EMB improves initial generation before revision.
 
-Sidecar 结构示例：
+### 5.2 Scoring Dimensions
+
+Use five intro-aligned dimensions:
+
+1. `paper_alignment`: Does the animation faithfully represent the target paper unit?
+2. `key_claim_coverage`: Does it cover the key claims and central ideas?
+3. `visual_robustness`: Is it readable and free of occlusion, overlap, cropping, unreadable text, or broken layout?
+4. `animation_flow`: Does it unfold in a reasonable order?
+5. `first_attempt_usability`: Is this first attempt usable without major repair?
+
+Binary label:
+
+```text
+human_pass_at_1: yes/no
+```
+
+Aggregate:
+
+```text
+Human Quality Score =
+mean(paper_alignment,
+     key_claim_coverage,
+     visual_robustness,
+     animation_flow,
+     first_attempt_usability)
+```
+
+### 5.3 Fatal Flags
+
+```text
+empty_or_unplayable
+unrelated_to_target
+major_formula_or_symbol_error
+unsupported_hallucination
+missing_central_idea
+severe_occlusion_or_overlap
+cropped_or_offscreen
+unreadable_text
+text_only_or_weak_visualization
+incoherent_animation_order
+other
+```
+
+### 5.4 Sidecar Example
+
+Do not expose `condition_hidden` to raters. It is for aggregation only.
 
 ```json
 {
-  "run_id": "exp_main_C_seed_0",
   "task_id": "1706.03762_method_3_2_1",
-  "attempt": "final",
-  "video_path": "runs/exp_main_C_seed_0/1706.03762_method_3_2_1/final.mp4",
-  "human_scores": {
-    "logic_flow": [90, 85, 88],
-    "layout_occlusion": [82, 80, 85],
-    "accuracy": [95, 92, 94]
-  }
+  "output_id": "run_xxx_scene_00_attempt_0",
+  "run_id": "run_xxx",
+  "condition_blind_id": "A17",
+  "condition_hidden": {
+    "system": "C",
+    "snapshot_records": 100
+  },
+  "attempt": "attempt_0",
+  "video_path": "runs/.../scene_00_attempt_0.mp4",
+  "rater_id_hash": "rater_03",
+  "scores": {
+    "paper_alignment": 4,
+    "key_claim_coverage": 4,
+    "visual_robustness": 3,
+    "animation_flow": 4,
+    "first_attempt_usability": 3
+  },
+  "human_pass_at_1": false,
+  "fatal_flags": {
+    "empty_or_unplayable": false,
+    "unrelated_to_target": false,
+    "major_formula_or_symbol_error": false,
+    "unsupported_hallucination": false,
+    "missing_central_idea": false,
+    "severe_occlusion_or_overlap": false,
+    "cropped_or_offscreen": false,
+    "unreadable_text": false,
+    "text_only_or_weak_visualization": false,
+    "incoherent_animation_order": false,
+    "other": false
+  },
+  "comment": "",
+  "time_spent_sec": 90
 }
 ```
 
-## 4. 标注、IAA 与发布合规
+## 6. EMB Snapshot Manifest
 
-标注流程采用轻量方法论文规格：两名标注者独立标注 `key_claims`、`evaluation_rubric`、`reference_scene_plan`，第三人仲裁分歧。主论文的人类一致性实验沿用 100 converged videos 协议；dataset 标注本身可先抽 30-50 条 pilot 样本，将逐维评分离散化后计算 Cohen's kappa，并在附录说明仲裁流程。无需同时报告 Krippendorff alpha 和 Kendall tau。
+Snapshot metadata is separate from the task table:
 
-发布时需要补齐：
+```json
+{
+  "experiment_id": "exp_main_2026_xxx",
+  "seed": 1,
+  "snapshot_id": "C_seed1_records100",
+  "config": "C",
+  "emb_store_path": "runs/exp_main/snapshots/seed_1/records_100",
+  "record_count_total": 100,
+  "record_count_success": 45,
+  "record_count_failure": 55,
+  "source_task_count": 37,
+  "last_memory_build_task_id": "xxxx",
+  "created_at": "2026-05-21T00:00:00Z"
+}
+```
 
-| 项 | 位置 |
+Fixed-probe evaluation must use snapshots in read-only mode:
+
+```text
+--emb-readonly
+```
+
+No probe output may be consolidated back into the snapshot.
+
+## 7. Release and Contamination Notes
+
+The task table keeps `paper_publish_date`, `paper_license`, and `contamination_group` so results can be reported by pre-cutoff, post-cutoff, and unknown buckets. arXiv papers may appear in pretraining corpora; date stratification mitigates contamination concerns but does not prove a model has not seen a paper.
+
+The dataset release should include:
+
+| artifact | purpose |
 |---|---|
-| 标注来源声明 | 正文 1 句 + 附录半页 |
-| 数据污染缓解 | 正文 2-3 句 |
-| License 说明 | `paper_license` 字段 + HF dataset card |
-| Responsible NLP Checklist | 按 EMNLP 模板填写 dataset 相关问题 |
-| Human Ceiling | 附录 20 条小样本表 |
+| Task table | Model-visible task stream plus eval metadata with isolation rules. |
+| Model input view | Physically removes eval-only fields. |
+| Evaluation sidecar | Key claims, reference scene plans, and human rubrics. |
+| Human scoring sidecar | Blind output-level first-attempt scores. |
+| Snapshot manifest | Frozen EMB snapshot metadata. |
+| Dataset card | License, source, contamination, and responsible release notes. |
 
-不需要完整 Gebru-style Datasheet；Responsible NLP Checklist 足够覆盖方法论文提交要求。
+## 8. Appendix Extensions
 
-## 5. 后续实现项
+The following are optional extensions, not main-body dataset requirements:
 
-文档 merge 后需要单独 tracking：
+- `full_paper` or global narrative tasks.
+- Cross-domain transfer beyond `cross_train` and `cross_test`.
+- Curriculum variants.
+- Isomorphic task pairs.
+- Human ceiling studies.
+- Storyboard alignment as a separate metric.
 
-| 项 | 目的 |
-|---|---|
-| Dataset loader | 物理隔离模型输入字段与评测字段 |
-| Storyboard scoring | 附录级实现 storyboard alignment |
-| HF dataset card | 说明 schema、license、污染缓解、Responsible NLP Checklist |
-| Human scoring sidecar | 保存 output-level human subset 的 `attempt_0/mid/final` 和人工逐维分 |
-| Curriculum generator | 生成并冻结 `task_idx_easy`、`task_idx_blocked`、`task_idx_interleaved` |
-| Isomorphic-pair manifest | 维护一小组跨域同构 qualitative cases 及 `full/partial` 标记 |
-
-## 6. 一句话总结
-
-P2M-Bench 应该短而硬：用 paper-section 五元组支撑 RQ1/RQ2/RQ3 与 ablation，严格隔离 ground truth 字段，并补足数据污染、标注来源、IAA、license 和 human ceiling 这些审稿防御点。多 curriculum 与同构任务对只作为附录鲁棒性 / qualitative analysis，`full_paper` 独立成 global track；CLI/parser 细节和 EMB 健康度评测不放在 dataset doc 主体中。
+They should not replace the main experiment: VLM Reflection Only vs frozen EMB snapshots on the same fixed probe.

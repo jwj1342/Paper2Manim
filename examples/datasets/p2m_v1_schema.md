@@ -1,25 +1,69 @@
-# Paper2Manim Task Dataset v1 Schema
+# Paper2Manim Task Dataset Minimal CSV Schema
 
-Drives experiment runners (`scripts/run_experiment.py`, `scripts/cross_domain.py`).
-Each row is one `paper2manim mvp2 --arxiv <id> --section <name>` invocation.
+This lightweight CSV drives current experiment runners such as
+`scripts/run_experiment.py` and `scripts/cross_domain.py`. Each row is one
+`paper2manim mvp2 --arxiv <id> --section <name>` invocation.
 
-## Columns
+The filename remains `p2m_v1_schema.md` for compatibility with existing
+references, but the split semantics are aligned with P2M-Bench v2.
+
+## Required Columns
 
 | column | type | required | notes |
-|---|---|---|---|
-| `arxiv_id` | str | yes | bare id (`1706.03762`) or `arXiv:` form. `parse_arxiv` accepts both. |
-| `section` | str | yes | exact `\section{...}` title slice; case-sensitive match |
-| `domain` | enum | yes | one of `cs / math / physics / quantum / econ` |
-| `split` | enum | yes | one of `bootstrap / eval / cross_train / cross_test` |
-| `expected_scene_count_min` | int | optional | sanity floor; storyboarder usually returns ≥ this many scenes; blank → no check |
+|---|---|---:|---|
+| `id` | str | recommended | Stable task id. If missing, derive from `arxiv_id + section`. |
+| `arxiv_id` | str | yes | Bare id (`1706.03762`) or `arXiv:` form. `parse_arxiv` accepts both. |
+| `section` | str | yes | Exact or near-exact section title passed to `paper2manim mvp2 --section`. |
+| `domain` | enum | yes | `cs / math / physics / quantum / econ`. |
+| `split` | enum | yes | Canonical v2 split or supported legacy alias. |
+| `expected_scene_count_min` | int | optional | Sanity floor only; blank means no check. |
 
-## Splits — what they mean
+## Recommended v2 Columns
 
-- **bootstrap** — used by `scripts/run_experiment.py` to grow EMB and measure A/B/C learning curves on the *same* domain.
-- **eval** — held-out tasks for measuring cross-task generalization within a domain (no EMB writes).
-- **cross_train** — feeds the *train* phase of `scripts/cross_domain.py`; EMB grows on this domain.
-- **cross_test** — feeds the *test* phase of `scripts/cross_domain.py` with `--emb-readonly`; the EMB built on `cross_train` is frozen, then transferred to a different domain.
+These columns are optional for current runners but recommended for main
+experiment manifests:
 
-## Domain values
+| column | type | notes |
+|---|---|---|
+| `stream_idx` | int/null | Frozen order for `memory_build`. |
+| `probe_idx` | int/null | Frozen order for `fixed_probe`. |
+| `scene_role` | enum | `BACKGROUND / METHOD / EXPERIMENT / CONCLUSION`. |
+| `category` | enum | `Concept / Equation / Algorithm / Figure / Architecture / Experiment`. |
+| `difficulty` | enum | `easy / medium / hard`. |
+| `human_eval_candidate` | bool | Whether outputs from this task may enter blind human scoring. |
 
-Single-token, lowercase. Used both for split-level filtering and for the `Context.domain` column written into EMB records (so retrieval can later filter by domain). The five values above are the v1 ceiling — if you need a new one, update `_DOMAINS` in `scripts/dataset_validate.py`.
+## Canonical v2 Splits
+
+| split | meaning |
+|---|---|
+| `memory_build` | Ordered stream used only to grow EMB and save snapshots. |
+| `fixed_probe` | Held-out tasks used for read-only evaluation of VLM Reflection Only and frozen EMB snapshots. |
+| `test_holdout` | Reserved final set; do not tune on it. |
+| `cross_train` | Optional appendix: grow EMB on one domain. |
+| `cross_test` | Optional appendix: frozen cross-domain probe. |
+
+## Legacy Aliases
+
+Legacy CSVs remain valid:
+
+| legacy split | canonical split |
+|---|---|
+| `bootstrap` | `memory_build` |
+| `eval` | `fixed_probe` |
+| `cross_train` | `cross_train` |
+| `cross_test` | `cross_test` |
+
+New dataset files and paper text should use `memory_build` and `fixed_probe`.
+
+## Field Isolation
+
+The minimal CSV must not contain answer fields. Evaluation-only fields such as
+`key_claims`, `reference_scene_plan`, `human_rubric`, human scores, and fatal
+flags belong in a separate evaluation or human-scoring sidecar and must never
+enter model prompts or EMB writes.
+
+## Domain Values
+
+Domain values are single-token lowercase strings. They are used by
+`--dataset-domain` and by EMB context metadata, so typos must fail validation.
+Allowed values are imported from `paper2manim.datasets.constants`.
