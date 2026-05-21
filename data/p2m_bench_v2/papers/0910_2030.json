@@ -1,8 +1,10 @@
 {
-  "paper_id": "0910.2030",
   "arxiv_id": "0910.2030",
-  "paper_title": "The Quantum Approximate Optimization Algorithm",
+  "paper_id": "0910.2030",
+  "paper_license": "arXiv.org perpetual, non-exclusive license 1.0",
+  "paper_license_source": "arxiv_abs_page",
+  "paper_license_url": "http://arxiv.org/licenses/nonexclusive-distrib/1.0/",
   "paper_publish_date": "2009-10-12",
-  "paper_license": "arXiv.org perpetual, non-exclusive license",
+  "paper_title": "The Quantum Approximate Optimization Algorithm",
   "release_note": "Release metadata only; raw full paper text is intentionally excluded from this artefact."
 }

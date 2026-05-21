@@ -27,7 +27,7 @@
   ],
   "snapshot_unit": "consolidated_memory_record",
   "snapshot_policy": "save snapshot when record_count_total >= K",
-  "memory_stream_min_expected_records": 468,
+  "memory_stream_min_expected_records": 472,
   "primary_metrics": [
     "Human Pass@1",
     "Reflection Depth",
@@ -68,8 +68,9 @@
     "sample_strategy": "stratified_by_scene_role_category_difficulty_after_target_audit",
     "attempt": "first_attempt",
     "requires_hydration_status": "ok",
-    "requires_target_annotation_status": "human_audited",
-    "status": "pending_target_audit_and_output_collection"
+    "status": "pending_output_collection_and_human_scores",
+    "requires_release_ground_truth": false,
+    "target_annotation_policy": "No release-facing key_claims/reference_scene_plan ground truth is used; draft annotations remain in _draft/ and are excluded from human scoring inputs."
   },
   "experiments": {
     "table_3_fixed_probe_snapshot": {
@@ -180,6 +181,26 @@
   },
   "notes": [
     "Only hydration_status==ok tasks are used in headline splits. Fallback-hydrated tasks are quarantined.",
-    "Human-audited target annotations and output-level human scores are required before strict paper-ready validation can pass."
-  ]
+    "tasks.jsonl contains only headline memory_build/fixed_probe/cross_test tasks; tasks_holdout.jsonl contains quarantined test_holdout_debug fallback tasks.",
+    "Cutoff stratification uses contamination_cutoff_date=2023-10-01.",
+    "Draft key_claims/reference_scene_plan annotations are kept outside the release-facing task rows in _draft/eval_annotations.jsonl until human audit.",
+    "No target-audit gate is required for human scoring because release-facing tasks do not expose key_claims/reference_scene_plan ground truth."
+  ],
+  "tasks_holdout_path": "tasks_holdout.jsonl",
+  "draft_annotations_path": "_draft/eval_annotations.jsonl",
+  "contamination_cutoff_date": "2023-10-01",
+  "matched_distribution_scope": {
+    "splits": [
+      "memory_build",
+      "fixed_probe"
+    ],
+    "domains": [
+      "cs"
+    ],
+    "excluded_domains": [
+      "math",
+      "physics"
+    ],
+    "reason": "math/physics fixed-probe cells are too small for a meaningful matched-distribution check in v2.1"
+  }
 }

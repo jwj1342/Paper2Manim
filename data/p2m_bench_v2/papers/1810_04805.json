@@ -1,8 +1,10 @@
 {
-  "paper_id": "1810.04805",
   "arxiv_id": "1810.04805",
-  "paper_title": "BERT: Pre-training of Deep Bidirectional Transformers for Language Understanding",
+  "paper_id": "1810.04805",
+  "paper_license": "arXiv.org perpetual, non-exclusive license 1.0",
+  "paper_license_source": "arxiv_abs_page",
+  "paper_license_url": "http://arxiv.org/licenses/nonexclusive-distrib/1.0/",
   "paper_publish_date": "2018-10-11",
-  "paper_license": "arXiv.org perpetual, non-exclusive license",
+  "paper_title": "BERT: Pre-training of Deep Bidirectional Transformers for Language Understanding",
   "release_note": "Release metadata only; raw full paper text is intentionally excluded from this artefact."
 }

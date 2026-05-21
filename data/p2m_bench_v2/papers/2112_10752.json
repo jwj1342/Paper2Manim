@@ -1,8 +1,10 @@
 {
-  "paper_id": "2112.10752",
   "arxiv_id": "2112.10752",
-  "paper_title": "High-Resolution Image Synthesis with Latent Diffusion Models",
+  "paper_id": "2112.10752",
+  "paper_license": "arXiv.org perpetual, non-exclusive license 1.0",
+  "paper_license_source": "arxiv_abs_page",
+  "paper_license_url": "http://arxiv.org/licenses/nonexclusive-distrib/1.0/",
   "paper_publish_date": "2021-12-20",
-  "paper_license": "arXiv.org perpetual, non-exclusive license",
+  "paper_title": "High-Resolution Image Synthesis with Latent Diffusion Models",
   "release_note": "Release metadata only; raw full paper text is intentionally excluded from this artefact."
 }

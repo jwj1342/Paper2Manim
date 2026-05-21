@@ -1,8 +1,8 @@
-"""Sample fixed-probe tasks for human scoring after target audit.
+"""Sample fixed-probe tasks for human scoring.
 
-By default, only tasks with ``target_annotation_status == human_audited`` are
-eligible. Use ``--pending-audit`` to inspect the provisional stratified sample
-that should be audited next.
+By default, tasks marked ``human_eval_candidate`` are eligible. Use
+``--pending-audit`` only for legacy/provisional datasets that still distinguish
+candidate tasks awaiting audit.
 """
 
 from __future__ import annotations
@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import json
 import random
+import sys
 from collections import defaultdict
 from pathlib import Path
 from typing import Any
@@ -40,7 +41,7 @@ def sample(tasks: list[dict[str, Any]], *, count: int, seed: int, pending_audit:
         if pending_audit:
             if not task.get("human_eval_candidate_pending_audit"):
                 continue
-        elif not (task.get("human_eval_candidate") and task.get("target_annotation_status") == "human_audited"):
+        elif not task.get("human_eval_candidate"):
             continue
         candidates.append(task)
 
@@ -73,7 +74,15 @@ def main() -> int:
     index = json.loads(args.dataset_index.read_text(encoding="utf-8"))
     tasks = _load_jsonl(args.dataset_index.parent / index.get("tasks_path", "tasks.jsonl"))
     count = int((index.get("human_scoring_plan") or {}).get("task_sample_count", 25))
-    for task in sample(tasks, count=count, seed=args.seed, pending_audit=args.pending_audit):
+    selected = sample(tasks, count=count, seed=args.seed, pending_audit=args.pending_audit)
+    if not selected:
+        mode = "pending audit" if args.pending_audit else "human evaluation"
+        print(
+            f"no eligible fixed_probe tasks found for {mode} sampling",
+            file=sys.stderr,
+        )
+        return 1
+    for task in selected:
         print(json.dumps({"task_id": task["task_id"], "human_eval_strata": task["human_eval_strata"]}, sort_keys=True))
     return 0
 

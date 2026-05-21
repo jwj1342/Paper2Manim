@@ -2,7 +2,7 @@
 
 Base validation checks that the dataset is a clean experimental instrument for
 the ManimAgent fixed-probe EMB snapshot protocol. Use ``--strict-paper-ready``
-after real target audits, run manifests, and human scores have been collected.
+after run manifests and human scores have been collected.
 
 Usage:
     python scripts/validate_p2m_bench.py data/p2m_bench_v2/dataset_index.json
@@ -45,6 +45,12 @@ GENERIC_ALGORITHM_PHRASES = (
     "animate the algorithm step by step",
     "highlight the update, stopping condition",
     "stopping condition",
+)
+GENERIC_DRAFT_BEATS = (
+    "introduce the concept",
+    "why it matters locally",
+    "show the relation among the named entities",
+    "end with the local takeaway",
 )
 MAIN_CONDITIONS = {
     "VLM Reflection Only",
@@ -129,8 +135,15 @@ def _check_split_counts(index: dict[str, Any], tasks: list[dict[str, Any]]) -> N
             raise AssertionError(f"{split}: declared {expected}, actual {actual.get(split, 0)}")
 
 
-def _check_distribution_match(tasks: list[dict[str, Any]]) -> None:
-    grouped = {split: _tasks_for(tasks, split) for split in MATCHED_SPLITS}
+def _check_distribution_match(index: dict[str, Any], tasks: list[dict[str, Any]]) -> None:
+    scope = index.get("matched_distribution_scope") or {}
+    domains = set(scope.get("domains") or [])
+
+    def scoped(split: str) -> list[dict[str, Any]]:
+        rows = _tasks_for(tasks, split)
+        return [task for task in rows if not domains or task.get("domain") in domains]
+
+    grouped = {split: scoped(split) for split in MATCHED_SPLITS}
     if not all(grouped.values()):
         raise AssertionError("memory_build and fixed_probe must both be non-empty")
     counters = {split: Counter(_stratum(task) for task in rows) for split, rows in grouped.items()}
@@ -185,6 +198,8 @@ def _check_isolation(index: dict[str, Any], tasks: list[dict[str, Any]]) -> None
 def _check_reference_plans(tasks: list[dict[str, Any]]) -> None:
     for task in tasks:
         plan = " ".join(str(item.get("beat", item)) for item in (task.get("eval_only") or {}).get("reference_scene_plan") or [])
+        if any(phrase in plan.lower() for phrase in GENERIC_DRAFT_BEATS):
+            raise AssertionError(f"{task['task_id']}: generic draft reference_scene_plan appears in release task")
         if task.get("category") not in {"Algorithm", "Architecture"} and task.get("scene_role") != "METHOD":
             if any(phrase in plan.lower() for phrase in GENERIC_ALGORITHM_PHRASES):
                 raise AssertionError(f"{task['task_id']}: generic algorithm wording on non-algorithm task")
@@ -192,6 +207,11 @@ def _check_reference_plans(tasks: list[dict[str, Any]]) -> None:
 
 def _check_annotations(tasks: list[dict[str, Any]], *, strict: bool) -> None:
     for task in tasks:
+        if task.get("target_annotation_status") == "llm_draft":
+            raise AssertionError(f"{task['task_id']}: llm_draft target annotations cannot appear in release-facing tasks")
+        source = (task.get("eval_only") or {}).get("annotation_source")
+        if source == "scripted_synthetic_simulation":
+            raise AssertionError(f"{task['task_id']}: scripted synthetic annotations must live in _draft/, not release tasks")
         if task.get("output_annotation_status") != "not_run":
             continue
         labels = {"human_scores", "human_pass_at_1", "fatal_flags", "human_quality_score"} & set((task.get("eval_only") or {}))
@@ -199,22 +219,42 @@ def _check_annotations(tasks: list[dict[str, Any]], *, strict: bool) -> None:
             raise AssertionError(f"{task['task_id']}: human output labels present before evaluation: {sorted(labels)}")
         if task.get("human_eval_candidate") and task.get("split") != "fixed_probe":
             raise AssertionError(f"{task['task_id']}: human_eval_candidate must be fixed_probe")
-        if task.get("human_eval_candidate") and task.get("target_annotation_status") != "human_audited":
-            raise AssertionError(f"{task['task_id']}: human_eval_candidate must be human_audited")
     if strict:
-        audited = [t for t in _tasks_for(tasks, "fixed_probe") if t.get("target_annotation_status") == "human_audited"]
-        if len(audited) < 25:
-            raise AssertionError(f"strict: need at least 25 human-audited fixed_probe tasks, found {len(audited)}")
+        candidates = [t for t in _tasks_for(tasks, "fixed_probe") if t.get("human_eval_candidate")]
+        if len(candidates) < 25:
+            raise AssertionError(f"strict: need at least 25 fixed_probe human_eval_candidate tasks, found {len(candidates)}")
 
 
 def _check_contamination(tasks: list[dict[str, Any]]) -> None:
-    allowed = {"pre_cutoff", "post_cutoff", "unknown"}
+    allowed = {"pre_cutoff", "post_cutoff"}
     for task in tasks:
         contamination = task.get("contamination") or {}
         if contamination.get("publication_stratum") not in allowed:
             raise AssertionError(f"{task['task_id']}: invalid publication_stratum")
         if not contamination.get("paper_publish_date"):
             raise AssertionError(f"{task['task_id']}: missing contamination paper_publish_date")
+        cutoff_reference = str(contamination.get("cutoff_reference") or "")
+        if cutoff_reference == "underlying_llm_cutoff":
+            raise AssertionError(f"{task['task_id']}: cutoff_reference must be a concrete date")
+        try:
+            publish_date = tuple(map(int, str(contamination["paper_publish_date"]).split("-")))
+            cutoff_date = tuple(map(int, cutoff_reference.split("-")))
+        except Exception as exc:  # noqa: BLE001
+            raise AssertionError(f"{task['task_id']}: cutoff_reference and paper_publish_date must be YYYY-MM-DD") from exc
+        expected = "pre_cutoff" if publish_date < cutoff_date else "post_cutoff"
+        if contamination["publication_stratum"] != expected:
+            raise AssertionError(f"{task['task_id']}: publication_stratum does not match cutoff_reference")
+
+
+def _check_paper_licenses(tasks: list[dict[str, Any]]) -> None:
+    licenses = {str(task.get("paper_license") or "") for task in tasks}
+    for task in tasks:
+        if not task.get("paper_license") or not task.get("paper_license_url"):
+            raise AssertionError(f"{task['task_id']}: missing paper license metadata")
+        if task.get("paper_license_source") != "arxiv_abs_page":
+            raise AssertionError(f"{task['task_id']}: paper_license_source must be arxiv_abs_page")
+    if len(tasks) > 1 and len(licenses) == 1:
+        raise AssertionError("paper_license is constant across all release tasks; expected per-paper arXiv license metadata")
 
 
 def _check_snapshot_plausibility(index: dict[str, Any], tasks: list[dict[str, Any]]) -> None:
@@ -301,7 +341,7 @@ def _check_optional_manifest_paths(root: Path, index: dict[str, Any], tasks: lis
 
 def _check_strict_outputs(root: Path, index: dict[str, Any]) -> None:
     paths = index.get("manifest_paths") or {}
-    required = ("target_audit", "human_scores")
+    required = ("human_scores",)
     for key in required:
         rel = paths.get(key)
         if not rel:
@@ -317,6 +357,13 @@ def validate(index_path: Path, *, strict: bool = False) -> None:
     index = json.loads(index_path.read_text(encoding="utf-8"))
     root = index_path.parent
     tasks = _load_jsonl(root / index.get("tasks_path", "tasks.jsonl"))
+    holdout_path = index.get("tasks_holdout_path")
+    if holdout_path:
+        holdout = _load_jsonl(root / holdout_path)
+        if any(task.get("split") != "test_holdout_debug" for task in holdout):
+            raise AssertionError(f"{holdout_path}: holdout file must contain only test_holdout_debug tasks")
+    if any(task.get("split") == "test_holdout_debug" for task in tasks):
+        raise AssertionError("release tasks_path must not include quarantined test_holdout_debug tasks")
     duplicate_ids = [task_id for task_id, count in Counter(t.get("task_id") for t in tasks).items() if count > 1]
     if duplicate_ids:
         raise AssertionError(f"duplicate task_id values: {duplicate_ids[:10]}")
@@ -324,12 +371,13 @@ def validate(index_path: Path, *, strict: bool = False) -> None:
     _check_split_counts(index, tasks)
     for split_a, split_b in (("memory_build", "fixed_probe"), ("memory_build", "cross_test"), ("fixed_probe", "cross_test")):
         assert_no_paper_overlap(tasks, split_a, split_b)
-    _check_distribution_match(tasks)
+    _check_distribution_match(index, tasks)
     _check_headline_tasks(tasks)
     _check_isolation(index, tasks)
     _check_reference_plans(tasks)
     _check_annotations(tasks, strict=strict)
     _check_contamination(tasks)
+    _check_paper_licenses(tasks)
     _check_snapshot_plausibility(index, tasks)
     _check_release_policy(index, tasks)
     _check_optional_manifest_paths(root, index, tasks)

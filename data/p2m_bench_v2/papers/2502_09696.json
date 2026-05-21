@@ -1,8 +1,10 @@
 {
-  "paper_id": "2502.09696",
   "arxiv_id": "2502.09696",
-  "paper_title": "Understanding Diffusion Transformers",
+  "paper_id": "2502.09696",
+  "paper_license": "arXiv.org perpetual, non-exclusive license 1.0",
+  "paper_license_source": "arxiv_abs_page",
+  "paper_license_url": "http://arxiv.org/licenses/nonexclusive-distrib/1.0/",
   "paper_publish_date": "2025-02-13",
-  "paper_license": "arXiv.org perpetual, non-exclusive license",
+  "paper_title": "Understanding Diffusion Transformers",
   "release_note": "Release metadata only; raw full paper text is intentionally excluded from this artefact."
 }

@@ -14,9 +14,27 @@
     "writes_to_emb"
   ],
   "properties": {
-    "writes_to_emb": {
-      "const": false
-    }
+    "task_id": {"type": "string"},
+    "condition": {
+      "enum": [
+        "VLM Reflection Only",
+        "EMB@0",
+        "EMB@50",
+        "EMB@100",
+        "EMB@200",
+        "EMB@400"
+      ]
+    },
+    "seed": {"type": "integer"},
+    "attempt_0_video_path": {"type": "string"},
+    "trace_path": {"type": "string"},
+    "reflection_depth": {"type": "number", "minimum": 0},
+    "vlm_scores": {"type": "object"},
+    "final_status": {"type": "string"},
+    "writes_to_emb": {"const": false},
+    "snapshot_id": {"type": "string"},
+    "blind_output_id": {"type": "string"},
+    "created_at": {"type": "string"}
   },
-  "additionalProperties": true
+  "additionalProperties": false
 }

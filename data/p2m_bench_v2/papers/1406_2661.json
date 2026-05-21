@@ -1,8 +1,10 @@
 {
-  "paper_id": "1406.2661",
   "arxiv_id": "1406.2661",
-  "paper_title": "Generative Adversarial Nets",
+  "paper_id": "1406.2661",
+  "paper_license": "arXiv.org perpetual, non-exclusive license 1.0",
+  "paper_license_source": "arxiv_abs_page",
+  "paper_license_url": "http://arxiv.org/licenses/nonexclusive-distrib/1.0/",
   "paper_publish_date": "2014-06-10",
-  "paper_license": "arXiv.org perpetual, non-exclusive license",
+  "paper_title": "Generative Adversarial Nets",
   "release_note": "Release metadata only; raw full paper text is intentionally excluded from this artefact."
 }

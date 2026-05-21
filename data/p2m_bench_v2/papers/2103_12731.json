@@ -1,8 +1,10 @@
 {
-  "paper_id": "2103.12731",
   "arxiv_id": "2103.12731",
-  "paper_title": "Fairness and Machine Learning in Market Design",
+  "paper_id": "2103.12731",
+  "paper_license": "CC BY 4.0",
+  "paper_license_source": "arxiv_abs_page",
+  "paper_license_url": "http://creativecommons.org/licenses/by/4.0/",
   "paper_publish_date": "2021-03-23",
-  "paper_license": "arXiv.org perpetual, non-exclusive license",
+  "paper_title": "Fairness and Machine Learning in Market Design",
   "release_note": "Release metadata only; raw full paper text is intentionally excluded from this artefact."
 }

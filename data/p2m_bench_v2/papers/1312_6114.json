@@ -1,8 +1,10 @@
 {
-  "paper_id": "1312.6114",
   "arxiv_id": "1312.6114",
-  "paper_title": "Auto-Encoding Variational Bayes",
+  "paper_id": "1312.6114",
+  "paper_license": "arXiv.org perpetual, non-exclusive license 1.0",
+  "paper_license_source": "arxiv_abs_page",
+  "paper_license_url": "http://arxiv.org/licenses/nonexclusive-distrib/1.0/",
   "paper_publish_date": "2013-12-20",
-  "paper_license": "arXiv.org perpetual, non-exclusive license",
+  "paper_title": "Auto-Encoding Variational Bayes",
   "release_note": "Release metadata only; raw full paper text is intentionally excluded from this artefact."
 }

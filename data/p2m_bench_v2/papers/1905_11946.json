@@ -1,8 +1,10 @@
 {
-  "paper_id": "1905.11946",
   "arxiv_id": "1905.11946",
-  "paper_title": "EfficientNet: Rethinking Model Scaling for Convolutional Neural Networks",
+  "paper_id": "1905.11946",
+  "paper_license": "arXiv.org perpetual, non-exclusive license 1.0",
+  "paper_license_source": "arxiv_abs_page",
+  "paper_license_url": "http://arxiv.org/licenses/nonexclusive-distrib/1.0/",
   "paper_publish_date": "2019-05-28",
-  "paper_license": "arXiv.org perpetual, non-exclusive license",
+  "paper_title": "EfficientNet: Rethinking Model Scaling for Convolutional Neural Networks",
   "release_note": "Release metadata only; raw full paper text is intentionally excluded from this artefact."
 }
