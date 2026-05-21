@@ -304,6 +304,65 @@ class TestMainDryRun:
         assert manifest["tasks"][0]["domain"] == "cs"
         assert manifest["tasks"][1]["arxiv_id"] == "1810.04805"
 
+    def test_dataset_index_loading_reads_single_json_split(self, re_mod, tmp_path):
+        dataset_root = tmp_path / "data"
+        dataset_root.mkdir()
+        index_path = dataset_root / "dataset_index.json"
+        payload_path = dataset_root / "p2m_bench_v2.json"
+        index_path.write_text(
+            json.dumps({"single_json_path": "p2m_bench_v2.json"}),
+            encoding="utf-8",
+        )
+        payload_path.write_text(
+            json.dumps(
+                {
+                    "tasks": [
+                        {
+                            "task_id": "t_memory",
+                            "arxiv_id": "1706.03762",
+                            "paper_id": "1706.03762",
+                            "section": "Background",
+                            "split": "memory_build",
+                            "domain": "cs",
+                            "model_input": {"target_unit": {"title": "Background"}},
+                        },
+                        {
+                            "task_id": "t_probe",
+                            "arxiv_id": "1810.04805",
+                            "paper_id": "1810.04805",
+                            "section": "Introduction",
+                            "split": "fixed_probe",
+                            "domain": "cs",
+                            "model_input": {"target_unit": {"title": "Introduction"}},
+                        },
+                    ],
+                    "holdout_tasks": [],
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        out_dir = tmp_path / "exp_dataset"
+        rc = re_mod.main([
+            "--dataset-index", str(index_path),
+            "--dataset-split", "fixed_probe",
+            "--configs", "A",
+            "--seeds", "1",
+            "--out-dir", str(out_dir),
+            "--dry-run",
+        ])
+
+        assert rc == 0
+        manifest = json.loads((out_dir / "manifest.json").read_text())
+        assert manifest["tasks"] == [
+            {
+                "task_id": "t_probe",
+                "arxiv_id": "1810.04805",
+                "section": "Introduction",
+                "domain": "cs",
+            }
+        ]
+
 
 # --------------------------------------------------------------------------- #
 # _invoke_one: subprocess plumbing

@@ -13,9 +13,10 @@
     "test_holdout": 0
   },
   "quarantine": {
-    "test_holdout_debug": 213,
+    "test_holdout_debug": 195,
     "reasons": {
-      "hydration_fallback": 213
+      "hydration_fallback": 177,
+      "promoted_to_headline": 18
     },
     "policy": "Excluded from EMB construction, fixed-probe evaluation, human scoring, and paper headline claims."
   },

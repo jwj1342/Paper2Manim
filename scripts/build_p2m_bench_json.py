@@ -1,9 +1,10 @@
-"""Build the single-file P2M-Bench release artifact.
+"""Build or refresh the single-file P2M-Bench release artifact.
 
-The source layout remains normalized for editing and validation:
-``dataset_index.json`` points to JSONL tasks and per-paper metadata files.
-This script packages those release-facing pieces into one JSON file while
-leaving output-level human scores in their sidecar annotation files.
+The current release layout uses ``dataset_index.json`` as a small pointer to
+``p2m_bench_v2.json``. When the older normalized source files are present, this
+script can still package them into one JSON file. In the cleaned release layout,
+it refreshes metadata in the existing single JSON and leaves output-level human
+scores in their sidecar annotation file.
 
 Usage:
     python scripts/build_p2m_bench_json.py data/p2m_bench_v2/dataset_index.json

@@ -160,6 +160,18 @@ def _check_distribution_match(index: dict[str, Any], tasks: list[dict[str, Any]]
         raise AssertionError(f"memory_build/fixed_probe distribution mismatch too high: L1={l1:.3f}")
 
 
+def _check_no_duplicate_target_units(tasks: list[dict[str, Any]]) -> None:
+    for split in HEADLINE_SPLITS:
+        rows = [t for t in tasks if t.get("split") == split]
+        keys = [(t.get("paper_id"), t.get("section")) for t in rows]
+        dups = [(k, c) for k, c in Counter(keys).items() if c > 1]
+        if dups:
+            raise AssertionError(
+                f"{split}: {len(dups)} duplicate (paper_id, section) pairs "
+                f"(extra rows: {sum(c - 1 for _, c in dups)}): {dups[:5]}"
+            )
+
+
 def _check_headline_tasks(tasks: list[dict[str, Any]]) -> None:
     for task in tasks:
         if task.get("split") not in HEADLINE_SPLITS:
@@ -379,6 +391,7 @@ def validate(index_path: Path, *, strict: bool = False) -> None:
         raise AssertionError(f"duplicate task_id values: {duplicate_ids[:10]}")
 
     _check_split_counts(index, tasks)
+    _check_no_duplicate_target_units(tasks)
     for split_a, split_b in (("memory_build", "fixed_probe"), ("memory_build", "cross_test"), ("fixed_probe", "cross_test")):
         assert_no_paper_overlap(tasks, split_a, split_b)
     _check_distribution_match(index, tasks)

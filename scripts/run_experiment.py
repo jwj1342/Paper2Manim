@@ -25,6 +25,14 @@ Usage:
       --configs A,B,C --seeds 1,2,3 \
       --out-dir runs/exp_main
 
+    # P2M-Bench v2 release dataset
+    python scripts/run_experiment.py \
+      --dataset-index data/p2m_bench_v2/dataset_index.json \
+      --dataset-split memory_build \
+      --configs C --seeds 1 \
+      --emb-store-base runs/_emb_p2m_bench \
+      --out-dir runs/p2m_bench_memory_build
+
     # Smoke (no LLM): proves the runner wires up without burning credits
     python scripts/run_experiment.py --tasks 1706.03762:Background --configs A \
       --dry-run --out-dir runs/exp_smoke
@@ -84,6 +92,7 @@ class TaskSpec:
     arxiv_id: str
     section: str | None = None
     domain: str = ""  # populated by --tasks-csv if the column is present
+    task_id: str = ""
 
     @classmethod
     def from_inline(cls, raw: str) -> TaskSpec:
@@ -102,9 +111,51 @@ class TaskSpec:
             raise ValueError(f"task row missing arxiv_id: {row!r}")
         return cls(arxiv_id=a, section=s or None, domain=d)
 
+    @classmethod
+    def from_dataset_task(cls, task: dict[str, object]) -> TaskSpec:
+        a = str(task.get("arxiv_id") or task.get("paper_id") or "").strip()
+        model_input = task.get("model_input") if isinstance(task.get("model_input"), dict) else {}
+        target_unit = (
+            model_input.get("target_unit")
+            if isinstance(model_input, dict) and isinstance(model_input.get("target_unit"), dict)
+            else {}
+        )
+        section = str(task.get("section") or target_unit.get("title") or "").strip()
+        domain = str(task.get("domain") or model_input.get("domain") or "").strip()
+        task_id = str(task.get("task_id") or task.get("id") or "").strip()
+        if not a:
+            raise ValueError(f"dataset task row missing arxiv_id/paper_id: {task!r}")
+        return cls(arxiv_id=a, section=section or None, domain=domain, task_id=task_id)
+
+
+def _load_dataset_tasks(index_path: Path, *, split: str | None) -> list[TaskSpec]:
+    index = json.loads(index_path.read_text(encoding="utf-8"))
+    root = index_path.parent
+    if index.get("single_json_path"):
+        payload = json.loads((root / index["single_json_path"]).read_text(encoding="utf-8"))
+    elif index.get("format") == "single_json":
+        payload = index
+    else:
+        raise SystemExit(
+            f"{index_path}: dataset-index loading requires single_json_path or format=single_json"
+        )
+
+    rows = list(payload.get("tasks") or [])
+    if split == "test_holdout_debug":
+        rows = list(payload.get("holdout_tasks") or [])
+    elif split:
+        rows = [row for row in rows if row.get("split") == split]
+    if not rows:
+        raise SystemExit(f"no dataset tasks found for split={split or '<all>'}: {index_path}")
+    return [TaskSpec.from_dataset_task(row) for row in rows]
+
 
 def load_tasks(args: argparse.Namespace) -> list[TaskSpec]:
     tasks: list[TaskSpec] = []
+    if args.dataset_index:
+        tasks.extend(
+            _load_dataset_tasks(Path(args.dataset_index), split=args.dataset_split)
+        )
     if args.tasks_csv:
         path = Path(args.tasks_csv)
         if not path.exists():
@@ -119,7 +170,7 @@ def load_tasks(args: argparse.Namespace) -> list[TaskSpec]:
     for raw in args.tasks or []:
         tasks.append(TaskSpec.from_inline(raw))
     if not tasks:
-        raise SystemExit("no tasks specified (use --tasks-csv or --tasks)")
+        raise SystemExit("no tasks specified (use --dataset-index, --tasks-csv, or --tasks)")
     return tasks
 
 
@@ -384,6 +435,16 @@ def main(argv: list[str] | None = None) -> int:
         help="CSV with header row containing arxiv_id, optional section, domain.",
     )
     parser.add_argument(
+        "--dataset-index",
+        help="P2M-Bench dataset_index.json. Loads tasks from its single JSON payload.",
+    )
+    parser.add_argument(
+        "--dataset-split",
+        default="memory_build",
+        choices=["memory_build", "fixed_probe", "cross_test", "test_holdout_debug", "all"],
+        help="Split to load from --dataset-index. Use 'all' for all headline tasks.",
+    )
+    parser.add_argument(
         "--configs",
         default="A,B,C",
         help=f"Comma-separated preset names. Known: {', '.join(known_presets())}",
@@ -427,6 +488,8 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--verbose", "-v", action="store_true")
     args = parser.parse_args(argv)
+    if args.dataset_split == "all":
+        args.dataset_split = None
 
     logging.basicConfig(
         level=logging.DEBUG if args.verbose else logging.INFO,
@@ -458,7 +521,12 @@ def main(argv: list[str] | None = None) -> int:
         configs=configs,
         seeds=seeds,
         tasks=[
-            {"arxiv_id": t.arxiv_id, "section": t.section, "domain": t.domain}
+            {
+                "task_id": t.task_id,
+                "arxiv_id": t.arxiv_id,
+                "section": t.section,
+                "domain": t.domain,
+            }
             for t in tasks
         ],
         cli_args=vars(args),
