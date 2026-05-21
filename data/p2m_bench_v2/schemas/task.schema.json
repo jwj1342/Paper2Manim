@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "P2M-Bench v2.1 task",
+  "type": "object",
+  "required": [
+    "task_id",
+    "paper_id",
+    "split",
+    "domain",
+    "scene_role",
+    "category",
+    "difficulty",
+    "model_input",
+    "eval_only",
+    "target_annotation_status",
+    "output_annotation_status",
+    "contamination"
+  ],
+  "properties": {},
+  "additionalProperties": true
+}

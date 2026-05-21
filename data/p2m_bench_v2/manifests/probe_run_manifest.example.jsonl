@@ -1,0 +1,1 @@
+{"task_id": "example_task", "condition": "EMB@100", "snapshot_id": "seed1_emb_100", "seed": 1, "attempt_0_video_path": "runs/main/probe/task/attempt_0.mp4", "trace_path": "runs/main/probe/task/trace.json", "reflection_depth": 2, "vlm_scores": {"logic_flow": 82, "layout_occlusion": 88, "accuracy": 85, "aggregate": 85}, "final_status": "converged", "writes_to_emb": false}

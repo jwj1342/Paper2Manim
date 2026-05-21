@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "EMB ablation run row",
+  "type": "object",
+  "required": [
+    "task_id",
+    "ablation",
+    "condition",
+    "seed",
+    "snapshot_id",
+    "attempt_0_video_path",
+    "trace_path",
+    "reflection_depth",
+    "vlm_scores",
+    "final_status",
+    "writes_to_emb"
+  ],
+  "properties": {
+    "writes_to_emb": {
+      "const": false
+    }
+  },
+  "additionalProperties": true
+}

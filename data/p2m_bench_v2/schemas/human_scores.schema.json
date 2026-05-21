@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Human score row",
+  "type": "object",
+  "required": [
+    "blind_output_id",
+    "task_id",
+    "rater_id_hash",
+    "scores",
+    "human_pass_at_1",
+    "fatal_flags",
+    "comment",
+    "created_at"
+  ],
+  "properties": {},
+  "additionalProperties": true
+}

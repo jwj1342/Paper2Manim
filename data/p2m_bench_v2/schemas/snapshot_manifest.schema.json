@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "EMB snapshot manifest row",
+  "type": "object",
+  "required": [
+    "experiment_id",
+    "seed",
+    "snapshot_id",
+    "config",
+    "emb_store_path",
+    "record_count_total",
+    "record_count_success",
+    "record_count_failure",
+    "source_task_count",
+    "last_memory_build_task_id",
+    "created_at"
+  ],
+  "properties": {
+    "record_count_total": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "record_count_success": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "record_count_failure": {
+      "type": "integer",
+      "minimum": 0
+    }
+  },
+  "additionalProperties": true
+}

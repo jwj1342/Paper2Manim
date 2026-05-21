@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Blind output sidecar row",
+  "type": "object",
+  "required": [
+    "blind_output_id",
+    "task_id",
+    "condition_hidden",
+    "video_path_internal",
+    "video_path_for_rater",
+    "attempt_idx",
+    "is_first_attempt"
+  ],
+  "properties": {
+    "attempt_idx": {
+      "type": "integer",
+      "const": 0
+    },
+    "is_first_attempt": {
+      "const": true
+    }
+  },
+  "additionalProperties": true
+}

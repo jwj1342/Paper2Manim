@@ -1,0 +1,1 @@
+{"blind_output_id": "B042", "task_id": "example_task", "condition_hidden": {"system": "EMB@100", "snapshot_id": "seed1_emb_100", "seed": 1}, "video_path_internal": "runs/main/condition_emb100/task/attempt_0.mp4", "video_path_for_rater": "blind/B042.mp4", "attempt_idx": 0, "is_first_attempt": true}

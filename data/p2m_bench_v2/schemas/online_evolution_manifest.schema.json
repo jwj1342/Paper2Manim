@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Online evolution row",
+  "type": "object",
+  "required": [
+    "task_id",
+    "stream_idx",
+    "seed",
+    "pre_task_record_count",
+    "post_task_record_count",
+    "attempt_0_video_path",
+    "reflection_depth",
+    "vlm_scores",
+    "final_status",
+    "writes_to_emb"
+  ],
+  "properties": {
+    "writes_to_emb": {
+      "const": true
+    }
+  },
+  "additionalProperties": true
+}
