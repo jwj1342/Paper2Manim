@@ -1,1 +1,0 @@
-{"task_id": "example_task", "stream_idx": 0, "seed": 1, "pre_task_record_count": 0, "post_task_record_count": 12, "attempt_0_video_path": "runs/online/task/attempt_0.mp4", "reflection_depth": 2, "vlm_scores": {"logic_flow": 82, "layout_occlusion": 88, "accuracy": 85, "aggregate": 85}, "final_status": "converged", "writes_to_emb": true}

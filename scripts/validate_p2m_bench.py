@@ -356,12 +356,22 @@ def _check_strict_outputs(root: Path, index: dict[str, Any]) -> None:
 def validate(index_path: Path, *, strict: bool = False) -> None:
     index = json.loads(index_path.read_text(encoding="utf-8"))
     root = index_path.parent
-    tasks = _load_jsonl(root / index.get("tasks_path", "tasks.jsonl"))
-    holdout_path = index.get("tasks_holdout_path")
-    if holdout_path:
-        holdout = _load_jsonl(root / holdout_path)
-        if any(task.get("split") != "test_holdout_debug" for task in holdout):
-            raise AssertionError(f"{holdout_path}: holdout file must contain only test_holdout_debug tasks")
+    if index.get("single_json_path"):
+        payload_path = root / index["single_json_path"]
+        payload = json.loads(payload_path.read_text(encoding="utf-8"))
+        tasks = payload.get("tasks") or []
+        holdout = payload.get("holdout_tasks") or []
+        index = payload.get("metadata") or index
+    elif index.get("format") == "single_json" and "tasks" in index:
+        tasks = index.get("tasks") or []
+        holdout = index.get("holdout_tasks") or []
+        index = index.get("metadata") or index
+    else:
+        tasks = _load_jsonl(root / index.get("tasks_path", "tasks.jsonl"))
+        holdout_path = index.get("tasks_holdout_path")
+        holdout = _load_jsonl(root / holdout_path) if holdout_path else []
+    if holdout and any(task.get("split") != "test_holdout_debug" for task in holdout):
+        raise AssertionError("holdout tasks must contain only test_holdout_debug tasks")
     if any(task.get("split") == "test_holdout_debug" for task in tasks):
         raise AssertionError("release tasks_path must not include quarantined test_holdout_debug tasks")
     duplicate_ids = [task_id for task_id, count in Counter(t.get("task_id") for t in tasks).items() if count > 1]

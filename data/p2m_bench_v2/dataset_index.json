@@ -1,10 +1,11 @@
 {
   "dataset": "P2M-Bench",
   "version": "v2.1",
-  "format": "jsonl_indexed",
+  "format": "single_json_index",
   "description": "Paper-section animation tasks for fixed-probe EMB snapshot evaluation in the ManimAgent EMNLP experiment.",
-  "tasks_path": "tasks.jsonl",
-  "papers_path": "papers/",
+  "single_json_path": "p2m_bench_v2.json",
+  "human_scores_path": "annotations/human_scores.jsonl",
+  "human_scores_included": false,
   "splits": {
     "memory_build": 39,
     "fixed_probe": 33,
@@ -18,189 +19,16 @@
     },
     "policy": "Excluded from EMB construction, fixed-probe evaluation, human scoring, and paper headline claims."
   },
-  "snapshot_targets": [
-    0,
-    50,
-    100,
-    200,
-    400
+  "release_contains": [
+    "dataset metadata",
+    "headline tasks",
+    "quarantined holdout tasks",
+    "paper metadata"
   ],
-  "snapshot_unit": "consolidated_memory_record",
-  "snapshot_policy": "save snapshot when record_count_total >= K",
-  "memory_stream_min_expected_records": 472,
-  "primary_metrics": [
-    "Human Pass@1",
-    "Reflection Depth",
-    "Human Quality Score"
-  ],
-  "auxiliary_metrics": [
-    "VLM Quality Score",
-    "VLM-Human Agreement",
-    "Failure Flag Frequency"
-  ],
-  "main_probe_conditions": [
-    "VLM Reflection Only",
-    "EMB@0",
-    "EMB@50",
-    "EMB@100",
-    "EMB@200",
-    "EMB@400"
-  ],
-  "human_scoring_plan": {
-    "main_table_conditions": [
-      "VLM Reflection Only",
-      "EMB@0",
-      "EMB@50",
-      "EMB@100",
-      "EMB@200",
-      "EMB@400"
-    ],
-    "release_subset_conditions": [
-      "VLM Reflection Only",
-      "EMB@0",
-      "EMB@100",
-      "EMB@400"
-    ],
-    "task_sample_count": 25,
-    "release_subset_videos_total": 100,
-    "full_main_table_videos_total": 150,
-    "raters_per_video": 3,
-    "sample_strategy": "stratified_by_scene_role_category_difficulty_after_target_audit",
-    "attempt": "first_attempt",
-    "requires_hydration_status": "ok",
-    "status": "pending_output_collection_and_human_scores",
-    "requires_release_ground_truth": false,
-    "target_annotation_policy": "No release-facing key_claims/reference_scene_plan ground truth is used; draft annotations remain in _draft/ and are excluded from human scoring inputs."
-  },
-  "experiments": {
-    "table_3_fixed_probe_snapshot": {
-      "conditions": [
-        "VLM Reflection Only",
-        "EMB@0",
-        "EMB@50",
-        "EMB@100",
-        "EMB@200",
-        "EMB@400"
-      ],
-      "manifest": "runs/<experiment_id>/probe_run_manifest.jsonl"
-    },
-    "table_4_emb_ablations": {
-      "manifest": "runs/<experiment_id>/ablation_run_manifest.jsonl"
-    },
-    "table_5_human_scoring": {
-      "annotations": "annotations/human_scores.jsonl"
-    },
-    "table_7_vlm_human_agreement": {
-      "requires": [
-        "probe_run_manifest.jsonl",
-        "human_scores.jsonl"
-      ]
-    },
-    "figure_4_online_evolution": {
-      "manifest": "runs/<experiment_id>/online_evolution_manifest.jsonl"
-    },
-    "table_8_cross_domain_transfer": {
-      "manifest": "runs/<experiment_id>/cross_domain_run_manifest.jsonl"
-    },
-    "table_9_retrieval_inspection": {
-      "annotations": "annotations/retrieval_inspection.jsonl"
-    },
-    "table_11_cutoff_stratification": {
-      "field": "task.contamination"
-    }
-  },
-  "field_isolation": {
-    "model_visible": [
-      "model_input.paper_title",
-      "model_input.abstract",
-      "model_input.target_unit",
-      "model_input.required_prior_context",
-      "model_input.prior_objects",
-      "model_input.scene_role",
-      "model_input.domain",
-      "model_input.source_type"
-    ],
-    "eval_only": [
-      "main_topics",
-      "key_claims",
-      "reference_scene_plan",
-      "human_rubric",
-      "vlm_diagnostic_rubric",
-      "human_scores",
-      "human_pass_at_1",
-      "fatal_flags",
-      "human_quality_score",
-      "condition_hidden"
-    ],
-    "emb_never_write": [
-      "main_topics",
-      "key_claims",
-      "reference_scene_plan",
-      "human_rubric",
-      "vlm_diagnostic_rubric",
-      "human_scores",
-      "human_pass_at_1",
-      "fatal_flags",
-      "human_quality_score",
-      "condition_hidden"
-    ]
-  },
-  "schemas": {
-    "task": "schemas/task.schema.json",
-    "snapshot_manifest": "schemas/snapshot_manifest.schema.json",
-    "probe_run_manifest": "schemas/probe_run_manifest.schema.json",
-    "blind_output_sidecar": "schemas/blind_output_sidecar.schema.json",
-    "human_scores": "schemas/human_scores.schema.json",
-    "target_audit": "schemas/target_audit.schema.json",
-    "ablation_run_manifest": "schemas/ablation_run_manifest.schema.json",
-    "online_evolution_manifest": "schemas/online_evolution_manifest.schema.json",
-    "cross_domain_run_manifest": "schemas/cross_domain_run_manifest.schema.json",
-    "retrieval_inspection": "schemas/retrieval_inspection.schema.json"
-  },
-  "manifest_paths": {
-    "snapshot_manifest": "runs/<experiment_id>/snapshot_manifest.jsonl",
-    "probe_run_manifest": "runs/<experiment_id>/probe_run_manifest.jsonl",
-    "blind_output_sidecar": "runs/<experiment_id>/blind_outputs.jsonl",
-    "ablation_run_manifest": "runs/<experiment_id>/ablation_run_manifest.jsonl",
-    "online_evolution_manifest": "runs/<experiment_id>/online_evolution_manifest.jsonl",
-    "cross_domain_run_manifest": "runs/<experiment_id>/cross_domain_run_manifest.jsonl",
-    "human_scores": "data/p2m_bench_v2/annotations/human_scores.jsonl",
-    "target_audit": "data/p2m_bench_v2/annotations/target_audit.jsonl",
-    "retrieval_inspection": "data/p2m_bench_v2/annotations/retrieval_inspection.jsonl"
-  },
-  "release_policy": {
-    "raw_full_paper_text_in_release": false,
-    "release_contains": [
-      "task identifiers",
-      "target-unit excerpts",
-      "target-unit anchors",
-      "paper metadata",
-      "scene-role labels",
-      "evaluation annotations when collected"
-    ]
-  },
-  "notes": [
-    "Only hydration_status==ok tasks are used in headline splits. Fallback-hydrated tasks are quarantined.",
-    "tasks.jsonl contains only headline memory_build/fixed_probe/cross_test tasks; tasks_holdout.jsonl contains quarantined test_holdout_debug fallback tasks.",
-    "Cutoff stratification uses contamination_cutoff_date=2023-10-01.",
-    "Draft key_claims/reference_scene_plan annotations are kept outside the release-facing task rows in _draft/eval_annotations.jsonl until human audit.",
-    "No target-audit gate is required for human scoring because release-facing tasks do not expose key_claims/reference_scene_plan ground truth."
-  ],
-  "tasks_holdout_path": "tasks_holdout.jsonl",
-  "draft_annotations_path": "_draft/eval_annotations.jsonl",
-  "contamination_cutoff_date": "2023-10-01",
-  "matched_distribution_scope": {
-    "splits": [
-      "memory_build",
-      "fixed_probe"
-    ],
-    "domains": [
-      "cs"
-    ],
-    "excluded_domains": [
-      "math",
-      "physics"
-    ],
-    "reason": "math/physics fixed-probe cells are too small for a meaningful matched-distribution check in v2.1"
-  }
+  "release_excludes": [
+    "raw full-paper text",
+    "draft annotations",
+    "example experiment manifests",
+    "output-level human scores"
+  ]
 }

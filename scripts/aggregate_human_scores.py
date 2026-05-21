@@ -221,10 +221,15 @@ def _task_paper_map(dataset_index: Path | None) -> dict[str, str]:
         return {}
     index = json.loads(dataset_index.read_text(encoding="utf-8"))
     root = dataset_index.parent
-    rows = _load_jsonl(root / index.get("tasks_path", "tasks.jsonl"))
-    holdout = index.get("tasks_holdout_path")
-    if holdout:
-        rows.extend(_load_jsonl(root / holdout))
+    if index.get("single_json_path"):
+        payload = json.loads((root / index["single_json_path"]).read_text(encoding="utf-8"))
+        rows = list(payload.get("tasks") or [])
+        rows.extend(payload.get("holdout_tasks") or [])
+    else:
+        rows = _load_jsonl(root / index.get("tasks_path", "tasks.jsonl"))
+        holdout = index.get("tasks_holdout_path")
+        if holdout:
+            rows.extend(_load_jsonl(root / holdout))
     return {str(row["task_id"]): str(row["paper_id"]) for row in rows}
 
 
