@@ -479,7 +479,7 @@ def _align_audio(
         )
 
     # Best-effort: speed to max, then trim to exact target.
-    sped = speed_audio(raw_path, _MAX_SPEED_FACTOR, output_path)
+    _ = speed_audio(raw_path, _MAX_SPEED_FACTOR, output_path)
     trimmed = trim_audio(output_path, target_dur, output_path)
     action = f"speed_{_MAX_SPEED_FACTOR}x_then_trim"
     log.warning(

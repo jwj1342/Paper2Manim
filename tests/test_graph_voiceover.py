@@ -365,8 +365,8 @@ class TestAudioAlignment:
 
     def test_strict_mode_fatal_on_overspeed(self, tmp_path):
         """Strict mode: overspeed audio raises AVError."""
-        from paper2manim.voiceover.assembly import _align_audio, _write_silence_wav
         from paper2manim.sandbox.av import AVError
+        from paper2manim.voiceover.assembly import _align_audio, _write_silence_wav
 
         raw = tmp_path / "raw.wav"
         _write_silence_wav(raw, 10.0)
@@ -377,8 +377,8 @@ class TestAudioAlignment:
 
     def test_pad_silence_for_short_audio(self, tmp_path):
         """Short audio gets padded to target."""
-        from paper2manim.voiceover.assembly import _align_audio, _write_silence_wav
         from paper2manim.sandbox.av import probe_duration
+        from paper2manim.voiceover.assembly import _align_audio, _write_silence_wav
 
         raw = tmp_path / "raw.wav"
         _write_silence_wav(raw, 1.0)
@@ -391,8 +391,8 @@ class TestAudioAlignment:
 
     def test_speed_within_range(self, tmp_path):
         """Audio within 1.15x range gets sped up to exact target."""
-        from paper2manim.voiceover.assembly import _align_audio, _write_silence_wav
         from paper2manim.sandbox.av import probe_duration
+        from paper2manim.voiceover.assembly import _align_audio, _write_silence_wav
 
         raw = tmp_path / "raw.wav"
         _write_silence_wav(raw, 2.3)  # 2.3 / 2.0 = 1.15 → at boundary

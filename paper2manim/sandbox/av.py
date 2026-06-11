@@ -19,8 +19,6 @@ import shutil
 import subprocess
 from pathlib import Path
 
-from paper2manim.sandbox.concat import concat_videos
-
 log = logging.getLogger(__name__)
 
 

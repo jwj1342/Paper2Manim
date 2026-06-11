@@ -64,7 +64,7 @@ class EdgeTTSClient:
 
         try:
             asyncio.run(_synthesize())
-        except RuntimeError as exc:
+        except RuntimeError:
             # Handle nested event loop (graph runs in thread pool)
             loop = asyncio.new_event_loop()
             try:

@@ -1,7 +1,6 @@
 """Tests for TTS infrastructure: MockTTSClient, factory, and TTSConfig."""
 
 import wave
-from pathlib import Path
 
 import pytest
 

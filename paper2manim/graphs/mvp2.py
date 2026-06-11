@@ -17,7 +17,6 @@ parallelism. Shared resources (Manim render, LLM rate) are bounded by
 from __future__ import annotations
 
 import logging
-from pathlib import Path
 from typing import Any, Literal
 
 from langgraph.graph import END, StateGraph
