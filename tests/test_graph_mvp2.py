@@ -108,12 +108,12 @@ def stub_pipeline(monkeypatch):
         from paper2manim.voiceover.assembly import VoiceoverAssemblyResult
 
         run_id = kwargs.get("run_id", "mvp2-test")
-        silent = Path("runs") / run_id / "final" / "silent.mp4"
-        silent.parent.mkdir(parents=True, exist_ok=True)
-        silent.write_bytes(b"\x00")
+        out = Path("runs") / run_id / "final" / "output.mp4"
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_bytes(b"\x00")
         return VoiceoverAssemblyResult(
-            final_video_path=str(silent),
-            silent_video_path=str(silent),
+            final_video_path=str(out),
+            silent_video_path=str(out),
         )
 
     monkeypatch.setattr("paper2manim.graphs.mvp2.assemble_voiceover", fake_assemble_voiceover)
