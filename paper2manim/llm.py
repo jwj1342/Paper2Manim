@@ -32,7 +32,7 @@ from pydantic import BaseModel, ValidationError
 from paper2manim import concurrency
 from paper2manim.config import PROJECT_ROOT, get_settings
 from paper2manim.config.config_loader import load_model_settings
-from paper2manim.config.model_config import ModelConfig, ModelSettings
+from paper2manim.config.model_config import ModelConfig, ModelSettings, TTSConfig
 
 log = logging.getLogger(__name__)
 _T = TypeVar("_T", bound=BaseModel)
@@ -133,6 +133,19 @@ def vision_checker_config() -> ModelConfig:
         ) from exc
 
 
+def tts_config() -> TTSConfig | None:
+    """Return the cached :class:`TTSConfig` from config.yaml, or ``None``.
+
+    Voiceover is optional — when no ``tts:`` block is present in config.yaml,
+    this returns ``None`` and the CLI will refuse ``--voiceover`` with a clear
+    error before starting the graph.
+    """
+    settings = _yaml_settings()
+    if settings is None:
+        return None
+    return settings.tts_config
+
+
 def _resolve_role(name: str) -> str:
     return _LEGACY_ALIAS_TO_ROLE.get(name, name)
 
@@ -163,6 +176,21 @@ def _build_yaml_client(
             oai_kwargs["temperature"] = temperature
         oai_kwargs.update(extra)
         return ChatOpenAI(**oai_kwargs)
+    if cfg.provider == "azure_foundry":
+        # Azure AI Foundry project OpenAI-compatible endpoint shape:
+        #   {project_endpoint}/openai/v1/chat/completions
+        # It accepts the normal OpenAI Bearer token, so ChatOpenAI can be used.
+        foundry_kwargs: dict[str, Any] = {
+            "model": cfg.model,
+            "api_key": cfg.api_key,
+            "base_url": cfg.base_url.rstrip("/") + "/openai/v1",
+            "timeout": timeout,
+            "max_completion_tokens": max_tokens,
+        }
+        if not cfg.omit_temperature:
+            foundry_kwargs["temperature"] = temperature
+        foundry_kwargs.update(extra)
+        return ChatOpenAI(**foundry_kwargs)
     if cfg.provider == "anthropic":
         # Imported lazily — langchain-anthropic is an optional dep until you
         # actually point a role at an Anthropic model.
@@ -187,7 +215,7 @@ def _build_yaml_client(
         return ChatAnthropic(**kwargs)
     raise RuntimeError(
         f"Unsupported provider '{cfg.provider}' on model '{cfg.name}'. "
-        "Choose 'openai_compatible' or 'anthropic'."
+        "Choose 'openai_compatible', 'azure_foundry', or 'anthropic'."
     )
 
 

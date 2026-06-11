@@ -17,20 +17,23 @@ parallelism. Shared resources (Manim render, LLM rate) are bounded by
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 from typing import Any, Literal
 
 from langgraph.graph import END, StateGraph
 from langgraph.types import Send
 
+from paper2manim.agents.narrator import narrator_node
 from paper2manim.agents.storyboarder import storyboarder_node
 from paper2manim.agents.summarizer import summarizer_node
 from paper2manim.artifacts import append_trace, run_dir
 from paper2manim.emb.distill import consolidate_run, infer_source_metadata
 from paper2manim.graphs.scene_graph import _emb_for_state as _scene_emb_for_state
 from paper2manim.graphs.scene_graph import get_compiled_scene_graph
+from paper2manim.llm import tts_config as get_tts_config
 from paper2manim.parsers import parse_arxiv, parse_local_pdf
-from paper2manim.sandbox.concat import concat_videos
 from paper2manim.state import PaperState
+from paper2manim.voiceover.assembly import assemble_voiceover
 
 log = logging.getLogger(__name__)
 
@@ -211,6 +214,16 @@ def run_scene_node(payload: dict[str, Any]) -> dict[str, Any]:
         }
         chosen_video = chosen.get("video_path") or last_rr["video_path"]
         updates["rendered_videos"] = [chosen_video]
+        # Structured record for voiceover: {scene, video_path, duration_s}.
+        # Duration is probed later in assemble_av; store None here as a
+        # placeholder so the scene→video mapping is available regardless.
+        updates["rendered_scene_videos"] = [
+            {
+                "scene": scene_name,
+                "video_path": chosen_video,
+                "duration_s": None,
+            }
+        ]
         if chosen_video != last_rr.get("video_path"):
             try:
                 append_trace(
@@ -277,18 +290,53 @@ def _pick_best_rendition(
 
 
 # --------------------------------------------------------------------------- #
-# Concat + consolidation
+# AV assembly — concat (silent) + optional voiceover (TTS + alignment + mux)
 # --------------------------------------------------------------------------- #
 
 
-def concat_node(state: PaperState) -> dict[str, Any]:
-    videos = state.get("rendered_videos", [])
-    if not videos:
-        return {"fatal_error": "concat: no successful scenes to concatenate"}
-    out_path = run_dir(state["run_id"]) / "final" / "output.mp4"
-    final = concat_videos(videos, out_path)
-    append_trace(state["run_id"], "concat", {"n_videos": len(videos), "final": str(final)})
-    return {"final_video_path": str(final)}
+def assemble_av_node(state: PaperState) -> dict[str, Any]:
+    """Assemble the final video: concat scene mp4s, and optionally add voiceover.
+
+    Delegates to :func:`paper2manim.voiceover.assembly.assemble_voiceover`
+    for the voiceover path. When voiceover is off, this is a thin wrapper
+    around ``concat_videos`` (identical to the old ``concat_node``).
+    """
+    voiceover_enabled = bool(state.get("voiceover_enabled", False))
+
+    scene_videos = state.get("rendered_scene_videos", [])
+    if not scene_videos:
+        # Fallback for legacy callers that only populate rendered_videos.
+        videos = state.get("rendered_videos", [])
+        scene_videos = [
+            {"scene": f"scene_{i:02d}", "video_path": vp, "duration_s": None}
+            for i, vp in enumerate(videos)
+        ]
+        if not scene_videos:
+            return {"fatal_error": "assemble_av: no successful scenes to concatenate"}
+
+    result = assemble_voiceover(
+        run_id=state["run_id"],
+        scene_videos=scene_videos,
+        narration_plan=state.get("narration_plan") if voiceover_enabled else None,
+        tts_cfg=get_tts_config() if voiceover_enabled else None,
+        voice_override=state.get("vo_tts_voice_override"),
+        speed_override=state.get("vo_tts_speed_override"),
+        language=state.get("voiceover_language") or "en",
+        strict=bool(state.get("voiceover_strict", True)),
+    )
+
+    out: dict[str, Any] = {
+        "final_video_path": result.final_video_path,
+        "silent_video_path": result.silent_video_path,
+        "narrated_video_path": result.narrated_video_path,
+        "final_audio_path": result.final_audio_path,
+        "tts_audio_paths": result.tts_audio_paths,
+    }
+    if result.fatal_error:
+        out["fatal_error"] = result.fatal_error
+    if result.warnings:
+        out["voiceover_warnings"] = result.warnings
+    return out
 
 
 def emb_consolidate_node(state: PaperState) -> dict[str, Any]:
@@ -379,11 +427,24 @@ def _is_fatal(next_node: str):
 
 
 def _post_storyboarder(state: PaperState) -> list[Send] | str:
-    """If the storyboarder set fatal_error or produced no scenes, end the run.
+    """Route storyboarder → narrator (if voiceover) or directly fan-out.
 
-    Otherwise emit Sends for each scene. Returning a list of Send objects
-    triggers the fan-out; returning a string routes to that node.
+    When voiceover is disabled, skip the narrator entirely to avoid an
+    unnecessary LLM call and keep ``--no-voiceover`` identical to the
+    pre-voiceover code path.
     """
+    if state.get("fatal_error"):
+        return END  # type: ignore[return-value]
+    sb = state.get("storyboard") or {"scenes": []}
+    if not sb.get("scenes"):
+        return END  # type: ignore[return-value]
+    if state.get("voiceover_enabled"):
+        return "narrator"
+    return fan_out_scenes(state)
+
+
+def _post_narrator(state: PaperState) -> list[Send] | str:
+    """After narrator: if fatal or no scenes → END; otherwise fan-out to scenes."""
     if state.get("fatal_error"):
         return END  # type: ignore[return-value]
     sb = state.get("storyboard") or {"scenes": []}
@@ -402,8 +463,9 @@ def build_mvp2_graph():
     g.add_node("parser", parser_node)
     g.add_node("summarizer", summarizer_node)
     g.add_node("storyboarder", storyboarder_node)
+    g.add_node("narrator", narrator_node)
     g.add_node("run_scene", run_scene_node)
-    g.add_node("concat", concat_node)
+    g.add_node("assemble_av", assemble_av_node)
     g.add_node("emb_consolidate", emb_consolidate_node)
 
     g.set_entry_point("parser")
@@ -412,19 +474,29 @@ def build_mvp2_graph():
         pred, mapping = _is_fatal(dst)
         g.add_conditional_edges(src, pred, mapping)
 
-    # Storyboarder → either END (fatal / no scenes) or Send fan-out to run_scene.
-    g.add_conditional_edges("storyboarder", _post_storyboarder, {"run_scene": "run_scene", END: END})
+    # Storyboarder → narrator (voiceover on) or direct fan-out to run_scene
+    # (voiceover off). Both routes end at END on fatal/no-scenes.
+    g.add_conditional_edges(
+        "storyboarder",
+        _post_storyboarder,
+        {"narrator": "narrator", "run_scene": "run_scene", END: END},
+    )
 
-    # After all run_scene branches finish, concat → emb_consolidate → END.
-    g.add_edge("run_scene", "concat")
-    g.add_edge("concat", "emb_consolidate")
+    # Narrator → fan-out to run_scene (or END on fatal/no-scenes).
+    g.add_conditional_edges(
+        "narrator", _post_narrator, {"run_scene": "run_scene", END: END}
+    )
+
+    # After all run_scene branches finish, assemble_av → emb_consolidate → END.
+    g.add_edge("run_scene", "assemble_av")
+    g.add_edge("assemble_av", "emb_consolidate")
     g.add_edge("emb_consolidate", END)
     return g.compile()
 
 
 __all__ = [
+    "assemble_av_node",
     "build_mvp2_graph",
-    "concat_node",
     "emb_consolidate_node",
     "fan_out_scenes",
     "parser_node",

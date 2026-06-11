@@ -76,6 +76,20 @@ def append_trace(run_id: str, node: str, payload: dict) -> None:
         f.write(line)
 
 
+def save_narration_json(run_id: str, data: Any) -> Path:
+    """Save the voiceover narration manifest to ``runs/<run_id>/final/narration.json``.
+
+    This is the primary audit artifact for voiceover experiments — it records
+    per-scene narration text, video/audio durations, alignment actions, and
+    the TTS configuration used (without API keys).
+    """
+    p = run_dir(run_id) / "final" / "narration.json"
+    p.write_text(
+        json.dumps(data, ensure_ascii=False, indent=2, default=str), encoding="utf-8"
+    )
+    return p
+
+
 def copy_final_video(run_id: str, src: str, name: str) -> Path:
     """Copy a rendered mp4 into runs/<run_id>/final/<name>.mp4."""
     import shutil

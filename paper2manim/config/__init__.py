@@ -20,7 +20,7 @@ from paper2manim.config.env import (
     Settings,
     get_settings,
 )
-from paper2manim.config.model_config import ModelConfig, ModelSettings
+from paper2manim.config.model_config import ModelConfig, ModelSettings, TTSConfig
 
 __all__ = [
     "Settings",
@@ -28,5 +28,6 @@ __all__ = [
     "PROJECT_ROOT",
     "ModelConfig",
     "ModelSettings",
+    "TTSConfig",
     "load_model_settings",
 ]

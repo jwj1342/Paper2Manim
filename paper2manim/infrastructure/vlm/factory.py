@@ -13,11 +13,11 @@ def build_vlm_client(cfg: ModelConfig) -> VLMClient:
         raise RuntimeError(
             f"Model '{cfg.name}' is not declared supports_vision=true; refusing to build a VLM client."
         )
-    if cfg.provider == "openai_compatible":
+    if cfg.provider in {"openai_compatible", "azure_foundry"}:
         return OpenAICompatibleVLMClient(cfg)
     if cfg.provider == "anthropic":
         return AnthropicVLMClient(cfg)
     raise RuntimeError(
         f"Unsupported VLM provider '{cfg.provider}' on '{cfg.name}'. "
-        "Use 'openai_compatible' or 'anthropic'."
+        "Use 'openai_compatible', 'azure_foundry', or 'anthropic'."
     )

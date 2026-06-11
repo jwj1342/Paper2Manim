@@ -206,8 +206,9 @@ def test_mvp2_early_exit_on_parser_fatal(monkeypatch):
     called = {
         "summarizer": False,
         "storyboarder": False,
+        "narrator": False,
         "run_scene": False,
-        "concat": False,
+        "assemble_av": False,
         "emb_consolidate": False,
     }
 

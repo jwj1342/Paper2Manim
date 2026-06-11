@@ -28,6 +28,11 @@ dependencies = [
 
 [project.optional-dependencies]
 mvp2 = ["marker-pdf>=1.0"]
+voiceover = [
+    # TTS backend for --voiceover. edge-tts is the recommended free default;
+    # no API key required (needs network access to Microsoft TTS service).
+    "edge-tts>=7.0",
+]
 emb = [
     # Episodic Memory Bank backend deps. The EMB module gracefully degrades
     # to InMemoryVectorIndex + HashEmbedder when these are absent, so they're

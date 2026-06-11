@@ -27,6 +27,43 @@ def _on_compute_node() -> bool:
     return bool(os.environ.get("SLURM_JOB_ID"))
 
 
+def _preflight_voiceover(
+    voiceover_enabled: bool, no_render: bool
+) -> None:
+    """Validate voiceover prerequisites before starting the graph.
+
+    Fails fast with ``click.UsageError`` so the user doesn't wait through a
+    full render only to discover a missing TTS config.
+    """
+    if not voiceover_enabled:
+        return
+
+    if no_render:
+        raise click.UsageError(
+            "--no-render and --voiceover are incompatible: "
+            "voiceover needs rendered videos to align audio to."
+        )
+
+    from paper2manim.llm import tts_config as get_tts_config
+
+    cfg = get_tts_config()
+    if cfg is None:
+        raise click.UsageError(
+            "--voiceover requires a 'tts:' block in config.yaml. "
+            "Add the block or pass --no-voiceover."
+        )
+
+    # Validate provider is supported (does not make a network call).
+    from paper2manim.infrastructure.tts.factory import build_tts_client
+
+    try:
+        build_tts_client(cfg)
+    except RuntimeError as exc:
+        raise click.UsageError(
+            f"TTS configuration error: {exc}"
+        ) from exc
+
+
 def _block_login_node_render(allow: bool) -> None:
     """Refuse to render on a login node unless --allow-render-on-login is passed.
 
@@ -86,8 +123,48 @@ cli.add_command(_emb_group)
     is_flag=True,
     help="Override the login-node guard (NOT recommended on Vulcan).",
 )
-def mvp1(input_arg: str, quality: str | None, no_render: bool, allow_render_on_login: bool) -> None:
+@click.option(
+    "--voiceover/--no-voiceover",
+    "voiceover_enabled",
+    default=False,
+    help="Enable voiceover narration + TTS synthesis.",
+)
+@click.option(
+    "--tts-voice",
+    default=None,
+    help="Override TTS voice (defaults to config.yaml tts.voice).",
+)
+@click.option(
+    "--tts-speed",
+    default=None,
+    type=float,
+    help="TTS speed multiplier (defaults to config.yaml tts.speed).",
+)
+@click.option(
+    "--voiceover-language",
+    default="en",
+    show_default=True,
+    help="Language for narration text.",
+)
+@click.option(
+    "--voiceover-strict/--voiceover-best-effort",
+    "voiceover_strict",
+    default=True,
+    help="Strict mode: TTS/alignment failures are fatal. Best-effort: degrade gracefully.",
+)
+def mvp1(
+    input_arg: str,
+    quality: str | None,
+    no_render: bool,
+    allow_render_on_login: bool,
+    voiceover_enabled: bool,
+    tts_voice: str | None,
+    tts_speed: float | None,
+    voiceover_language: str,
+    voiceover_strict: bool,
+) -> None:
     """MVP 1.0: short text -> single-scene Manim video."""
+    _preflight_voiceover(voiceover_enabled, no_render)
     if not no_render:
         _block_login_node_render(allow_render_on_login)
     from paper2manim.graphs.mvp1 import build_mvp1_graph
@@ -106,6 +183,9 @@ def mvp1(input_arg: str, quality: str | None, no_render: bool, allow_render_on_l
         "current_scene_idx": 0,
         "quality": quality or settings.PAPER2MANIM_QUALITY,  # type: ignore[typeddict-item]
         "skip_render": no_render,
+        "voiceover_enabled": voiceover_enabled,
+        "voiceover_strict": voiceover_strict,
+        "voiceover_language": voiceover_language,
     }
     console.print(f"[cyan]MVP 1.0 run {run_id}[/cyan]: {text[:80]}...")
     # Stable plain-text marker so external drivers (run_experiment.py,
@@ -233,6 +313,35 @@ def mvp1(input_arg: str, quality: str | None, no_render: bool, allow_render_on_l
     help="§8.3 Ablation E — disable EMB.failure on both retrieve and write.",
 )
 @click.option(
+    "--voiceover/--no-voiceover",
+    "voiceover_enabled",
+    default=False,
+    help="Enable voiceover narration + TTS synthesis.",
+)
+@click.option(
+    "--tts-voice",
+    default=None,
+    help="Override TTS voice (defaults to config.yaml tts.voice).",
+)
+@click.option(
+    "--tts-speed",
+    default=None,
+    type=float,
+    help="TTS speed multiplier (defaults to config.yaml tts.speed).",
+)
+@click.option(
+    "--voiceover-language",
+    default="en",
+    show_default=True,
+    help="Language for narration text.",
+)
+@click.option(
+    "--voiceover-strict/--voiceover-best-effort",
+    "voiceover_strict",
+    default=True,
+    help="Strict mode: TTS/alignment failures are fatal. Best-effort: degrade gracefully.",
+)
+@click.option(
     "--scene-parallelism",
     default=1,
     type=int,
@@ -271,6 +380,11 @@ def mvp2(
     dataset_domain: str | None,
     emb_no_success_channel: bool,
     emb_no_failure_channel: bool,
+    voiceover_enabled: bool,
+    tts_voice: str | None,
+    tts_speed: float | None,
+    voiceover_language: str,
+    voiceover_strict: bool,
     scene_parallelism: int,
     render_concurrency: int | None,
     llm_rps: float | None,
@@ -279,6 +393,7 @@ def mvp2(
 
     Input: exactly one of --pdf <path> or --arxiv <id|url>.
     """
+    _preflight_voiceover(voiceover_enabled, no_render)
     if bool(pdf_path) == bool(arxiv_spec):
         raise click.UsageError("Provide exactly one of --pdf or --arxiv.")
     if not no_render:
@@ -325,6 +440,13 @@ def mvp2(
         "dataset_domain": dataset_domain,
         "emb_no_success_channel": emb_no_success_channel,
         "emb_no_failure_channel": emb_no_failure_channel,
+        # Voiceover / TTS
+        "voiceover_enabled": voiceover_enabled,
+        "voiceover_strict": voiceover_strict,
+        "voiceover_language": voiceover_language,
+        "narration_plan": None,
+        "vo_tts_voice_override": tts_voice,
+        "vo_tts_speed_override": tts_speed,
     }
     if emb_enabled:
         console.print(f"[cyan]EMB enabled[/cyan] — store={resolved_emb_path}, theta_high={emb_theta_high}")
