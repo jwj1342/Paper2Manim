@@ -108,13 +108,19 @@ def stub_pipeline(monkeypatch, tmp_path):
 
     monkeypatch.setattr("paper2manim.graphs.scene_graph.sample_frames_montage", fake_sample)
 
-    def fake_concat(paths, out):
-        out = Path(out)
+    def fake_assemble_voiceover(**kwargs):
+        from paper2manim.voiceover.assembly import VoiceoverAssemblyResult
+
+        run_id = kwargs.get("run_id", "test")
+        out = Path("runs") / run_id / "final" / "output.mp4"
         out.parent.mkdir(parents=True, exist_ok=True)
         out.write_bytes(b"\x00")
-        return out
+        return VoiceoverAssemblyResult(
+            final_video_path=str(out),
+            silent_video_path=str(out),
+        )
 
-    monkeypatch.setattr("paper2manim.graphs.mvp2.concat_videos", fake_concat)
+    monkeypatch.setattr("paper2manim.graphs.mvp2.assemble_voiceover", fake_assemble_voiceover)
 
     return {"llm": llm}
 
@@ -497,14 +503,20 @@ def test_vlm_mixed_verdicts_across_scenes(monkeypatch, tmp_path):
         out.write_bytes(b"\x89PNG\r\n\x1a\n")
         return out
 
-    def fake_concat(paths, out):
-        out = Path(out)
+    def fake_assemble_voiceover(**kwargs):
+        from paper2manim.voiceover.assembly import VoiceoverAssemblyResult
+
+        run_id = kwargs.get("run_id", "test")
+        out = Path("runs") / run_id / "final" / "output.mp4"
         out.parent.mkdir(parents=True, exist_ok=True)
         out.write_bytes(b"\x00")
-        return out
+        return VoiceoverAssemblyResult(
+            final_video_path=str(out),
+            silent_video_path=str(out),
+        )
 
     monkeypatch.setattr("paper2manim.graphs.scene_graph.sample_frames_montage", fake_sample)
-    monkeypatch.setattr("paper2manim.graphs.mvp2.concat_videos", fake_concat)
+    monkeypatch.setattr("paper2manim.graphs.mvp2.assemble_voiceover", fake_assemble_voiceover)
 
     # SceneA pass on first review; SceneB revise then pass; SceneC hits cap.
     state_calls: dict[str, int] = {}

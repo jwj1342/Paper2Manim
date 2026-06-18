@@ -152,6 +152,35 @@ class PaperState(TypedDict, total=False):
     emb_no_success_channel: bool
     emb_no_failure_channel: bool
 
+    # ---- Voiceover / TTS ----
+    # ``narration_plan`` is set by the narrator node before scene fan-out.
+    # ``voiceover_enabled`` gates TTS synthesis + mux in assemble_av.
+    # ``voiceover_strict`` (default True) makes TTS/alignment failures fatal;
+    # when False, best-effort degradation (silence padding, speed-up) keeps the
+    # graph moving and writes warnings into ``voiceover_warnings``.
+    narration_plan: dict | None
+    voiceover_enabled: bool
+    voiceover_strict: bool
+    voiceover_language: str | None
+    # CLI overrides for TTS config (--tts-voice, --tts-speed).
+    # When set, these take precedence over config.yaml tts.voice / tts.speed.
+    vo_tts_voice_override: str | None
+    vo_tts_speed_override: float | None
+    # Accumulated across scenes by the assemble_av node (single writer; no fan-out).
+    tts_audio_paths: list[str]
+    final_audio_path: str | None
+    # ``silent_video_path`` is always produced (or copied from the existing
+    # concat output). ``narrated_video_path`` is only set when voiceover +
+    # mux succeed. When voiceover is off, ``narrated_video_path`` is None
+    # and ``final_video_path`` = ``silent_video_path``.
+    silent_video_path: str | None
+    narrated_video_path: str | None
+    voiceover_warnings: Annotated[list[dict], operator.add]
+    # Structured scene video records: {scene, video_path, duration_s}.
+    # Populated by run_scene_node alongside rendered_videos so assemble_av
+    # can look up the actual video → scene mapping without re-parsing paths.
+    rendered_scene_videos: Annotated[list[dict], operator.add]
+
     # ---- Control flags ----
     # `fatal_error` is for graph-level fatal errors only (parser/summarizer/storyboarder/
     # missing-input failures). It triggers early exit to END. Do NOT use this for

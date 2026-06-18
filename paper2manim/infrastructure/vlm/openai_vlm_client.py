@@ -13,13 +13,22 @@ from paper2manim.infrastructure.vlm.client import encode_image_data_url
 class OpenAICompatibleVLMClient:
     def __init__(self, cfg: ModelConfig) -> None:
         self._cfg = cfg
-        self._client = OpenAI(api_key=cfg.api_key, base_url=cfg.base_url, timeout=cfg.timeout)
+        base_url = cfg.base_url
+        client_kwargs: dict = {}
+        if cfg.provider == "azure_foundry":
+            base_url = cfg.base_url.rstrip("/") + "/openai/v1"
+            # Azure AI Foundry project endpoints take api-version as a query
+            # parameter; thread it onto every request when configured.
+            if cfg.api_version:
+                client_kwargs["default_query"] = {"api-version": cfg.api_version}
+        self._client = OpenAI(
+            api_key=cfg.api_key, base_url=base_url, timeout=cfg.timeout, **client_kwargs
+        )
 
     def review_scene(self, prompt: str, image_path: str | Path) -> str:
         url = encode_image_data_url(Path(image_path))
         kwargs: dict = {
             "model": self._cfg.model,
-            "max_tokens": self._cfg.max_tokens,
             "messages": [
                 {
                     "role": "user",
@@ -30,6 +39,10 @@ class OpenAICompatibleVLMClient:
                 }
             ],
         }
+        if self._cfg.provider == "azure_foundry":
+            kwargs["max_completion_tokens"] = self._cfg.max_tokens
+        else:
+            kwargs["max_tokens"] = self._cfg.max_tokens
         if not self._cfg.omit_temperature:
             kwargs["temperature"] = self._cfg.temperature
         resp = self._client.chat.completions.create(**kwargs)

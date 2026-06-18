@@ -7,7 +7,7 @@ from typing import Any
 
 import yaml
 
-from paper2manim.config.model_config import ModelConfig, ModelSettings
+from paper2manim.config.model_config import ModelConfig, ModelSettings, TTSConfig
 
 _ENV_VAR_RE = re.compile(r"\$([A-Z_][A-Z0-9_]*)")
 
@@ -23,14 +23,16 @@ def load_model_settings(path: str | Path) -> ModelSettings:
     data = _read_yaml(path)
     raw_models = _require_list(data, "models")
     raw_roles = _require_dict(data, "model_roles")
+    raw_tts = data.get("tts")
 
     models = [_parse_model(item, index) for index, item in enumerate(raw_models)]
     roles = {str(key): str(value).strip() for key, value in raw_roles.items()}
+    tts = _parse_tts_config(raw_tts) if raw_tts else None
 
     _validate_roles_exist(roles, models)
     _validate_vision_checker(roles, models)
 
-    return ModelSettings.from_dicts(models, roles)
+    return ModelSettings.from_dicts(models, roles, tts_config=tts)
 
 
 def _parse_model(raw: Any, index: int) -> ModelConfig:
@@ -38,6 +40,7 @@ def _parse_model(raw: Any, index: int) -> ModelConfig:
         raise TypeError(f"Model at index {index} must be a mapping, got {type(raw).__name__}.")
     raw_copy = dict(raw)
     raw_copy["api_key"] = _resolve_env(raw_copy.get("api_key", ""))
+    raw_copy["base_url"] = _resolve_env(raw_copy.get("base_url", ""))
     return ModelConfig.from_dict(raw_copy)
 
 
@@ -109,3 +112,23 @@ def _require_dict(data: dict[str, Any], key: str) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise TypeError(f"Config key '{key}' must be a mapping, got {type(value).__name__}.")
     return value
+
+
+def _parse_tts_config(raw: Any) -> TTSConfig | None:
+    """Parse the optional ``tts:`` block from config.yaml.
+
+    Returns ``None`` when the block is absent (voiceover is optional).
+    On malformed input, raises with a clear message so the operator can
+    fix config.yaml rather than silently disabling voiceover.
+    """
+    if raw is None:
+        return None
+    if not isinstance(raw, dict):
+        raise TypeError(
+            f"tts config must be a mapping, got {type(raw).__name__}."
+        )
+    # Resolve env-var references in api_key before passing to TTSConfig.
+    resolved = dict(raw)
+    resolved["api_key"] = _resolve_env(raw.get("api_key", ""))
+    resolved["base_url"] = _resolve_env(raw.get("base_url", ""))
+    return TTSConfig.from_dict(resolved)

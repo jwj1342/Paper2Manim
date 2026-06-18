@@ -101,16 +101,22 @@ def stub_pipeline(monkeypatch):
 
     monkeypatch.setattr("paper2manim.graphs.scene_graph.render", fake_render)
 
-    # Stub concat: just write a placeholder
-    def fake_concat(paths, out):
+    # Stub assemble_voiceover: return a placeholder result with a fake mp4.
+    def fake_assemble_voiceover(**kwargs):
         from pathlib import Path
 
-        out = Path(out)
+        from paper2manim.voiceover.assembly import VoiceoverAssemblyResult
+
+        run_id = kwargs.get("run_id", "mvp2-test")
+        out = Path("runs") / run_id / "final" / "output.mp4"
         out.parent.mkdir(parents=True, exist_ok=True)
         out.write_bytes(b"\x00")
-        return out
+        return VoiceoverAssemblyResult(
+            final_video_path=str(out),
+            silent_video_path=str(out),
+        )
 
-    monkeypatch.setattr("paper2manim.graphs.mvp2.concat_videos", fake_concat)
+    monkeypatch.setattr("paper2manim.graphs.mvp2.assemble_voiceover", fake_assemble_voiceover)
     return {"render_calls": render_calls, "llm": llm}
 
 
@@ -206,8 +212,9 @@ def test_mvp2_early_exit_on_parser_fatal(monkeypatch):
     called = {
         "summarizer": False,
         "storyboarder": False,
+        "narrator": False,
         "run_scene": False,
-        "concat": False,
+        "assemble_av": False,
         "emb_consolidate": False,
     }
 
