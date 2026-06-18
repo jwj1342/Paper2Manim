@@ -5,6 +5,7 @@ ffmpeg/ffprobe must be on PATH for AV assembly steps.
 """
 
 import json
+import shutil
 import subprocess
 from pathlib import Path
 from unittest.mock import MagicMock
@@ -16,6 +17,12 @@ from paper2manim.graphs.mvp1 import assemble_av_node as mvp1_assemble_av
 from paper2manim.graphs.mvp2 import assemble_av_node as mvp2_assemble_av
 from paper2manim.schemas.narration import NarrationPlanModel
 from paper2manim.state import PaperState
+
+# AV assembly steps shell out to ffmpeg/ffprobe; skip when unavailable.
+pytestmark = pytest.mark.skipif(
+    shutil.which("ffmpeg") is None or shutil.which("ffprobe") is None,
+    reason="ffmpeg/ffprobe not available on PATH",
+)
 
 
 def _create_test_mp4(path: Path, duration_s: float = 2.0) -> Path:
@@ -283,6 +290,56 @@ class TestMVP2Voiceover:
         assert "fatal_error" not in out
         # Should have warnings about missing narration.
         assert out.get("voiceover_warnings")
+
+    def test_missing_narration_strict_fatal(self, monkeypatch, tmp_path):
+        run_dir = _mock_run_dir(monkeypatch, tmp_path)
+        video = _create_test_mp4(run_dir / "v.mp4", duration_s=2.0)
+
+        narration = NarrationPlanModel(
+            title="Test",
+            scenes=[{"scene": "Other", "text": "x", "target_duration_s": 2.0, "language": "en"}],
+        )
+
+        state: PaperState = {
+            "run_id": "test-run",
+            "voiceover_enabled": True,
+            "voiceover_strict": True,
+            "narration_plan": narration.model_dump(),
+            "rendered_videos": [str(video)],
+            "rendered_scene_videos": [
+                {"scene": "Missing", "video_path": str(video), "duration_s": None}
+            ],
+            "attempts": [],
+        }
+        out = mvp2_assemble_av(state)
+        assert "fatal_error" in out
+        assert "no narration" in out["fatal_error"]
+
+    def test_empty_narration_strict_fatal(self, monkeypatch, tmp_path):
+        run_dir = _mock_run_dir(monkeypatch, tmp_path)
+        video = _create_test_mp4(run_dir / "v.mp4", duration_s=2.0)
+
+        narration = NarrationPlanModel(
+            title="Test",
+            scenes=[{"scene": "S", "text": "real text", "target_duration_s": 2.0, "language": "en"}],
+        )
+        plan = narration.model_dump()
+        plan["scenes"][0]["text"] = "   "  # whitespace-only → treated as empty
+
+        state: PaperState = {
+            "run_id": "test-run",
+            "voiceover_enabled": True,
+            "voiceover_strict": True,
+            "narration_plan": plan,
+            "rendered_videos": [str(video)],
+            "rendered_scene_videos": [
+                {"scene": "S", "video_path": str(video), "duration_s": None}
+            ],
+            "attempts": [],
+        }
+        out = mvp2_assemble_av(state)
+        assert "fatal_error" in out
+        assert "empty narration" in out["fatal_error"]
 
 
 # --------------------------------------------------------------------------- #

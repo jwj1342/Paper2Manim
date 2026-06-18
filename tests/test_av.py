@@ -1,5 +1,6 @@
 """Tests for paper2manim.sandbox.av — ffmpeg/ffprobe utilities."""
 
+import shutil
 import struct
 import wave
 from pathlib import Path
@@ -13,6 +14,13 @@ from paper2manim.sandbox.av import (
     pad_audio,
     probe_duration,
     speed_audio,
+)
+
+# These tests shell out to ffmpeg/ffprobe; skip the whole module when the
+# binaries aren't installed so the suite stays portable across machines/CI.
+pytestmark = pytest.mark.skipif(
+    shutil.which("ffmpeg") is None or shutil.which("ffprobe") is None,
+    reason="ffmpeg/ffprobe not available on PATH",
 )
 
 

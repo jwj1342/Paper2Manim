@@ -14,9 +14,16 @@ class OpenAICompatibleVLMClient:
     def __init__(self, cfg: ModelConfig) -> None:
         self._cfg = cfg
         base_url = cfg.base_url
+        client_kwargs: dict = {}
         if cfg.provider == "azure_foundry":
             base_url = cfg.base_url.rstrip("/") + "/openai/v1"
-        self._client = OpenAI(api_key=cfg.api_key, base_url=base_url, timeout=cfg.timeout)
+            # Azure AI Foundry project endpoints take api-version as a query
+            # parameter; thread it onto every request when configured.
+            if cfg.api_version:
+                client_kwargs["default_query"] = {"api-version": cfg.api_version}
+        self._client = OpenAI(
+            api_key=cfg.api_key, base_url=base_url, timeout=cfg.timeout, **client_kwargs
+        )
 
     def review_scene(self, prompt: str, image_path: str | Path) -> str:
         url = encode_image_data_url(Path(image_path))

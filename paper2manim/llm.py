@@ -187,6 +187,9 @@ def _build_yaml_client(
             "timeout": timeout,
             "max_completion_tokens": max_tokens,
         }
+        # Azure AI Foundry project endpoints take api-version as a query param.
+        if cfg.api_version:
+            foundry_kwargs["default_query"] = {"api-version": cfg.api_version}
         if not cfg.omit_temperature:
             foundry_kwargs["temperature"] = temperature
         foundry_kwargs.update(extra)

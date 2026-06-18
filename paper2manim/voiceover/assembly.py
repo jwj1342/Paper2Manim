@@ -140,14 +140,10 @@ def assemble_voiceover(
 
         narration = narration_by_scene.get(scene_name)
         if narration is None:
-            entry, aligned = _missing_narration(
-                scene_name, video_path, video_dur,
-                final_audio_dir, strict, warnings,
-            )
-            if aligned is not None:
-                aligned_audios.append(str(aligned))
-            narration_entries.append(entry)
-            if strict and aligned is None:
+            # Strict mode treats a missing narration entry as fatal. Check
+            # before falling back to silence — _missing_narration always
+            # returns a valid path, so the fatal branch must gate it here.
+            if strict:
                 return VoiceoverAssemblyResult(
                     final_video_path=str(silent),
                     silent_video_path=str(silent),
@@ -156,18 +152,20 @@ def assemble_voiceover(
                         f"entry (strict mode)"
                     ),
                 )
-            continue
-
-        narration_text = str(narration.get("text", ""))
-        if not narration_text.strip():
-            entry, aligned = _empty_narration(
+            entry, aligned = _missing_narration(
                 scene_name, video_path, video_dur,
                 final_audio_dir, strict, warnings,
             )
             if aligned is not None:
                 aligned_audios.append(str(aligned))
             narration_entries.append(entry)
-            if strict and aligned is None:
+            continue
+
+        narration_text = str(narration.get("text", ""))
+        if not narration_text.strip():
+            # Strict mode treats empty narration text as fatal (same reason
+            # as the missing-entry case above).
+            if strict:
                 return VoiceoverAssemblyResult(
                     final_video_path=str(silent),
                     silent_video_path=str(silent),
@@ -176,6 +174,13 @@ def assemble_voiceover(
                         f"text (strict mode)"
                     ),
                 )
+            entry, aligned = _empty_narration(
+                scene_name, video_path, video_dur,
+                final_audio_dir, strict, warnings,
+            )
+            if aligned is not None:
+                aligned_audios.append(str(aligned))
+            narration_entries.append(entry)
             continue
 
         # Synthesize + align this scene.
@@ -205,6 +210,20 @@ def assemble_voiceover(
                     f"assemble_voiceover: TTS or alignment failed for {scene_name}"
                 ),
             )
+
+    # If every scene was skipped (e.g. all video files missing in best-effort
+    # mode), there is no audio to mux. We already have a valid silent concat —
+    # return it with a warning instead of letting concat_audios raise a
+    # cryptic "audio_paths is empty" that surfaces as a generic mux failure.
+    if not aligned_audios:
+        warnings.append(
+            {"scene": "*", "warning": "no aligned audio produced; returning silent video"}
+        )
+        return VoiceoverAssemblyResult(
+            final_video_path=str(silent),
+            silent_video_path=str(silent),
+            warnings=warnings,
+        )
 
     # Concat audios + mux.
     voiceover_wav = run_dir(run_id) / "final" / "voiceover.wav"
@@ -350,14 +369,18 @@ def _synthesize_and_align(
     warnings: list[dict] = []
     raw_path = final_audio_dir / f"{scene_name}.raw.wav"
 
-    # TTS synthesis.
+    # TTS synthesis. The alignment pipeline (pad/speed/trim/concat) is
+    # WAV-only, and raw_path is a ``.wav`` file — always request wav from the
+    # provider so a non-wav config value can't write mp3/opus bytes into a
+    # ``.wav`` filename and break downstream concat/mux. tts_cfg.audio_format
+    # is still recorded in the manifest for provenance.
     try:
         tts.synthesize(
             narration_text,
             raw_path,
             voice=voice,
             speed=speed,
-            audio_format=tts_cfg.audio_format,
+            audio_format="wav",
         )
     except Exception as exc:  # noqa: BLE001
         if strict:
