@@ -1,9 +1,9 @@
 """Parallel scene fan-out: equivalence + failure isolation + concurrency wiring.
 
-These tests drive the MVP 2.0 graph end-to-end with mocked LLM / render / VLM
+These tests drive the Generation pipeline graph end-to-end with mocked LLM / render / VLM
 so the only variable is the new ``run_scene`` Send fan-out plus the
 :mod:`paper2manim.concurrency` throttles. They complement the existing
-``test_graph_mvp2_vlm.py`` suite by stressing multi-scene paths and
+``test_graph_generate_vlm.py`` suite by stressing multi-scene paths and
 failure-isolation guarantees that didn't exist in the serial pipeline.
 """
 
@@ -21,7 +21,7 @@ from paper2manim.graphs.scene_graph import _reset_emb_cache
 from paper2manim.schemas import StoryboardModel, SummaryModel
 
 # --------------------------------------------------------------------------- #
-# Reusable pipeline stub (mirrors test_graph_mvp2_vlm.py / test_emb_phase4.py)
+# Reusable pipeline stub (mirrors test_graph_generate_vlm.py / test_emb_integration.py)
 # --------------------------------------------------------------------------- #
 
 
@@ -97,7 +97,7 @@ def parallel_pipeline(monkeypatch, tmp_path):
     from paper2manim.parsers import ParsedInput
 
     monkeypatch.setattr(
-        "paper2manim.graphs.mvp2.parse_local_pdf",
+        "paper2manim.graphs.generation.parse_local_pdf",
         lambda p: ParsedInput(text="# T", fmt="markdown", source="pdf:fake"),
     )
 
@@ -138,7 +138,7 @@ def parallel_pipeline(monkeypatch, tmp_path):
             silent_video_path=str(out),
         )
 
-    monkeypatch.setattr("paper2manim.graphs.mvp2.assemble_voiceover", fake_assemble_voiceover)
+    monkeypatch.setattr("paper2manim.graphs.generation.assemble_voiceover", fake_assemble_voiceover)
 
     yield {"render_events": render_events, "scenes_per_test": scenes_per_test}
     _reset_emb_cache()
@@ -165,9 +165,9 @@ def _initial_state(*, scene_names: list[str], **overrides) -> dict:
 
 
 def _run(state: dict) -> dict:
-    from paper2manim.graphs.mvp2 import build_mvp2_graph
+    from paper2manim.graphs.generation import build_generation_graph
 
-    g = build_mvp2_graph()
+    g = build_generation_graph()
     return g.invoke(state, config={"recursion_limit": 200})
 
 

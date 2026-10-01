@@ -10,7 +10,7 @@ present) but retrieved nothing (``success_indexed=0``).
 These tests pin down four invariants:
 
 1. A fresh store writes ``embedder.json`` on creation.
-2. Subsequent opens use the pinned spec, ignoring caller flags that disagree.
+2. Subsequent opens reject a conflicting encoder request.
 3. Legacy stores (no spec file, but records with embeddings) get a spec
    backfilled from the first record's embedding dim.
 4. Genuine dim mismatch on rehydrate now raises ``VectorIndexError`` instead
@@ -31,7 +31,7 @@ from paper2manim.emb import (
     SuccessBody,
 )
 from paper2manim.emb.embedder import HashEmbedder
-from paper2manim.emb.exceptions import VectorIndexError
+from paper2manim.emb.exceptions import EMBError, VectorIndexError
 from paper2manim.emb.manager import (
     EMBEDDER_SPEC_FILENAME,
     EpisodicMemoryBank,
@@ -74,8 +74,8 @@ class TestFreshStorePinning:
         assert spec["model"] == "sentence-transformers/all-MiniLM-L6-v2"
 
 
-class TestPinnedSpecOverridesCaller:
-    def test_hash_store_ignores_use_real_embedder_true(self, tmp_path, caplog):
+class TestPinnedSpecRejectsChanges:
+    def test_hash_store_rejects_use_real_embedder_true(self, tmp_path, caplog):
         """Reproducer of issue #27 Bug B in inverted form: hash-bootstrapped
         store re-opened by a caller asking for ST should NOT silently switch."""
         base = tmp_path / "emb"
@@ -84,12 +84,10 @@ class TestPinnedSpecOverridesCaller:
         _put_success(emb1, "intro to attention")
         emb1.save_indices()
 
-        # Re-open asking for ST — pinned hash@64 should win.
-        with caplog.at_level("WARNING", logger="paper2manim.emb.manager"):
-            emb2 = build_default_emb(base, use_faiss=False, use_real_embedder=True)
-        assert any("pinned to hash" in m for m in caplog.messages), caplog.messages
-        # And critically: index actually has the record (no silent drop).
-        assert emb2.stats()["success_indexed"] == 1
+        # A different encoder is rejected before opening the stored vectors.
+        with pytest.raises(EMBError, match="pinned"):
+            build_default_emb(base, use_faiss=False, use_real_embedder=True)
+        assert emb1.stats()["success_indexed"] == 1
 
     def test_hash_store_ignores_custom_dim_change(self, tmp_path):
         """Caller can't change embedder dim by re-opening. A hash@64 store
@@ -156,7 +154,7 @@ class TestLegacyStoreBackfill:
 
         # Caller asks for hash, but the legacy data is 384-d → backfill MUST
         # win (otherwise we'd be back to issue #27 Bug B).
-        emb = build_default_emb(base, use_faiss=False, use_real_embedder=False)
+        emb = build_default_emb(base, use_faiss=False, use_real_embedder=True)
         spec = json.loads(_spec_path(base).read_text())
         assert spec["kind"] == "sentence-transformers"
         assert spec["dim"] == 384

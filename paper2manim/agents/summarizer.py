@@ -1,4 +1,4 @@
-"""MVP 2.0 Summarizer agent: parsed markdown -> SummaryModel JSON."""
+"""Generation pipeline Summarizer agent: parsed markdown -> SummaryModel JSON."""
 
 from __future__ import annotations
 
@@ -16,16 +16,13 @@ from paper2manim.state import PaperState
 
 log = logging.getLogger(__name__)
 
-# 经验阈值：>30K chars 用 pro 模型（256K context 还够，但 reviewer/coder 还要嵌进来，留余量）
-_USE_PRO_CHAR_THRESHOLD = 30_000
-
 
 def summarizer_node(state: PaperState) -> dict[str, Any]:
     md = state.get("parsed_markdown")
     if not md:
         return {"fatal_error": "summarizer: parsed_markdown missing"}
 
-    model_alias = "pro" if len(md) > _USE_PRO_CHAR_THRESHOLD else "flash"
+    model_alias = "global_reader"
     log.info("[summarizer] model=%s md_chars=%d", model_alias, len(md))
     system = load_prompt("summarizer")
     llm = get_llm(model_alias, temperature=0.2, max_tokens=4096)
@@ -34,7 +31,9 @@ def summarizer_node(state: PaperState) -> dict[str, Any]:
             llm, SummaryModel, [("system", system), ("user", md)], retries=1
         )
     except (OutputParserException, ValidationError) as exc:
-        return {"fatal_error": f"summarizer: schema parse failed: {type(exc).__name__}: {str(exc)[:200]}"}
+        return {
+            "fatal_error": f"summarizer: schema parse failed: {type(exc).__name__}: {str(exc)[:200]}"
+        }
     summary_dict = summary.model_dump()
 
     if state.get("run_id"):

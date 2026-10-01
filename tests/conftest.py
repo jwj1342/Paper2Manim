@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 from unittest.mock import MagicMock
 
 import pytest
@@ -32,7 +31,8 @@ def _isolated_runs_dir(tmp_path, monkeypatch):
     runs = tmp_path / "runs"
     runs.mkdir()
     monkeypatch.setenv("PAPER2MANIM_RUNS_DIR", str(runs))
-    monkeypatch.setenv("MIMO_API_KEY", os.environ.get("MIMO_API_KEY", "tp-test-key"))
+    monkeypatch.setenv("MIMO_API_KEY", "tp-test-key")
+    monkeypatch.setenv("MIMO_BASE_URL", "http://localhost:0")
 
     from paper2manim.config import env as env_mod
 

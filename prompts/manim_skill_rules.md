@@ -47,6 +47,6 @@ class MyScene(Scene):
 ## Pitfalls to avoid
 - **Always raw-string LaTeX**: `MathTex(r"\frac{1}{2}")`, never `"\\frac{1}{2}"` in normal strings.
 - **Don't `from manim.opengl import *`**: this project uses cairo.
-- **Don't load images**: no `ImageMobject(...)` for MVP 1.0/2.0.
+- **Don't load images**: no `ImageMobject(...)` in generated scenes.
 - **Don't reference unknown LaTeX macros**: stick to `amsmath`/`amssymb`. `\R` is not standard; use `\mathbb{R}`.
 - **Class name must match the requested scene.name** so `manim render scene.py SceneName` finds it.

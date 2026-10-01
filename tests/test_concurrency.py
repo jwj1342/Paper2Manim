@@ -190,7 +190,7 @@ class TestRenderSemaphoreIntegration:
         """
         from paper2manim.sandbox import render as render_mod
 
-        monkeypatch.setattr(render_mod, "validate_manim_code", lambda code: None)
+        monkeypatch.setattr(render_mod, "validate_manim_code", lambda code, **kwargs: None)
 
         track_lock = threading.Lock()
 

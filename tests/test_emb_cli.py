@@ -1,4 +1,4 @@
-"""B4 tests for ``paper2manim emb`` subcommand group.
+"""Tests for ``paper2manim emb`` subcommand group.
 
 Cover:
 
@@ -42,7 +42,7 @@ def empty_store(tmp_path):
     p = tmp_path / "emb_store"
     p.mkdir()
     # Build once just to lay down memory.db + indices files.
-    build_default_emb(str(p), use_real_embedder=False)
+    build_default_emb(str(p), use_real_embedder=False, use_faiss=False)
     return p
 
 
@@ -52,7 +52,7 @@ def populated_store(tmp_path):
     last_used values to exercise stats / prune filters."""
     p = tmp_path / "emb_store"
     p.mkdir()
-    emb = build_default_emb(str(p), use_real_embedder=False)
+    emb = build_default_emb(str(p), use_real_embedder=False, use_faiss=False)
     now = time.time()
     # Two cold success records (hit=0, old) + one warm (hit=10, recent)
     emb.put(MemoryRecord(
@@ -161,7 +161,7 @@ class TestHitStats:
 
 class TestCollectStats:
     def test_empty_store(self, empty_store):
-        emb = build_default_emb(str(empty_store), use_real_embedder=False)
+        emb = build_default_emb(str(empty_store), use_real_embedder=False, use_faiss=False)
         s = collect_stats(emb)
         assert s["total"] == 0
         assert s["success"] == 0
@@ -171,7 +171,7 @@ class TestCollectStats:
         assert s["failure_hit_stats"]["n"] == 0
 
     def test_populated_store(self, populated_store):
-        emb = build_default_emb(str(populated_store), use_real_embedder=False)
+        emb = build_default_emb(str(populated_store), use_real_embedder=False, use_faiss=False)
         s = collect_stats(emb)
         assert s["total"] == 5
         assert s["success"] == 3
@@ -190,7 +190,7 @@ class TestCollectStats:
 
 class TestSelectColdRecords:
     def test_default_thresholds_pick_cold_zero_hit_old_records(self, populated_store):
-        emb = build_default_emb(str(populated_store), use_real_embedder=False)
+        emb = build_default_emb(str(populated_store), use_real_embedder=False, use_faiss=False)
         cold = select_cold_records(
             emb, populated_store, cold_hit_threshold=0, max_age_days=30,
         )
@@ -199,7 +199,7 @@ class TestSelectColdRecords:
         assert len(cold) == 3, f"expected 3, got {[(r.id[:8], r.polarity) for r in cold]}"
 
     def test_polarity_filter(self, populated_store):
-        emb = build_default_emb(str(populated_store), use_real_embedder=False)
+        emb = build_default_emb(str(populated_store), use_real_embedder=False, use_faiss=False)
         cold_succ = select_cold_records(
             emb, populated_store,
             cold_hit_threshold=0, max_age_days=30, polarity="success",
@@ -209,14 +209,14 @@ class TestSelectColdRecords:
         assert len(cold_succ) == 2
 
     def test_max_age_too_long_returns_empty(self, populated_store):
-        emb = build_default_emb(str(populated_store), use_real_embedder=False)
+        emb = build_default_emb(str(populated_store), use_real_embedder=False, use_faiss=False)
         cold = select_cold_records(
             emb, populated_store, cold_hit_threshold=0, max_age_days=365,
         )
         assert cold == []
 
     def test_higher_hit_threshold_admits_more_records(self, populated_store):
-        emb = build_default_emb(str(populated_store), use_real_embedder=False)
+        emb = build_default_emb(str(populated_store), use_real_embedder=False, use_faiss=False)
         # Threshold 5 → still excludes warm success (10) but includes failure 2 (3)
         cold = select_cold_records(
             emb, populated_store, cold_hit_threshold=5, max_age_days=1,
@@ -272,7 +272,7 @@ class TestEmbCli:
 
     def test_show_by_id_prefix(self, runner, populated_store):
         # Find any record id from the store
-        emb = build_default_emb(str(populated_store), use_real_embedder=False)
+        emb = build_default_emb(str(populated_store), use_real_embedder=False, use_faiss=False)
         recs = emb.all()
         rid = recs[0].id
         result = runner.invoke(cli, [
@@ -290,7 +290,7 @@ class TestEmbCli:
         assert "no record matches" in result.output
 
     def test_prune_dry_run_does_not_delete(self, runner, populated_store):
-        emb_pre = build_default_emb(str(populated_store), use_real_embedder=False)
+        emb_pre = build_default_emb(str(populated_store), use_real_embedder=False, use_faiss=False)
         n_before = emb_pre.count()
         result = runner.invoke(cli, [
             "emb", "prune", "--store-path", str(populated_store),
@@ -298,11 +298,11 @@ class TestEmbCli:
         ])
         assert result.exit_code == 0, result.output
         assert "[dry-run]" in result.output
-        emb_post = build_default_emb(str(populated_store), use_real_embedder=False)
+        emb_post = build_default_emb(str(populated_store), use_real_embedder=False, use_faiss=False)
         assert emb_post.count() == n_before
 
     def test_prune_apply_actually_deletes(self, runner, populated_store):
-        emb_pre = build_default_emb(str(populated_store), use_real_embedder=False)
+        emb_pre = build_default_emb(str(populated_store), use_real_embedder=False, use_faiss=False)
         n_before = emb_pre.count()
         result = runner.invoke(cli, [
             "emb", "prune", "--store-path", str(populated_store),
@@ -311,7 +311,7 @@ class TestEmbCli:
         ])
         assert result.exit_code == 0, result.output
         assert "deleted" in result.output
-        emb_post = build_default_emb(str(populated_store), use_real_embedder=False)
+        emb_post = build_default_emb(str(populated_store), use_real_embedder=False, use_faiss=False)
         assert emb_post.count() < n_before
 
     def test_stats_on_missing_store_fails_loudly(self, runner, tmp_path):
@@ -335,7 +335,7 @@ class TestEmbRetest:
     """
 
     def _put_success_with_v_rev(self, store_path, *, run_id, scene_id, vlm_score, final_v_rev):
-        emb = build_default_emb(str(store_path), use_real_embedder=False)
+        emb = build_default_emb(str(store_path), use_real_embedder=False, use_faiss=False)
         emb.put(MemoryRecord(
             polarity="success",
             context=Context(task_text="scene desc", source_paper="arxiv:x"),
@@ -432,7 +432,7 @@ def test_provenance_final_v_rev_round_trips_through_sqlite(tmp_path):
     """final_v_rev (added to support retest) must survive store.put -> get."""
     p = tmp_path / "emb_store"
     p.mkdir()
-    emb = build_default_emb(str(p), use_real_embedder=False)
+    emb = build_default_emb(str(p), use_real_embedder=False, use_faiss=False)
     rec = MemoryRecord(
         polarity="success",
         context=Context(task_text="t", source_paper="arxiv:rt"),
@@ -473,7 +473,7 @@ def test_distill_success_record_records_final_v_rev(tmp_path, monkeypatch):
         "paper2manim.emb.distill.find_scored_scenes",
         lambda _rid, _scenes: [fake],
     )
-    recs = distill_success_records("run-x", theta_high=85.0)
+    recs = distill_success_records("run-x", theta_high=85.0, rationale_writer=lambda *_: "Distilled rationale")
     assert len(recs) == 1
     assert recs[0].provenance.final_v_rev == 2
     assert recs[0].provenance.vlm_score == 91.0

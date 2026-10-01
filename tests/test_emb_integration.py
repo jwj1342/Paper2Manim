@@ -1,6 +1,6 @@
-"""Phase 4 integration tests: EMB nodes wired into the MVP 2.0 graph.
+"""EMB integration tests: EMB nodes wired into the Generation pipeline graph.
 
-We reuse the stub pattern from ``test_graph_mvp2_vlm.py`` (mocked LLM, render,
+We reuse the stub pattern from ``test_graph_generate_vlm.py`` (mocked LLM, render,
 sampler, concat) but inject a pre-built in-memory EMB via ``state["emb_instance"]``
 so retrieval / consolidation hit a real ``EpisodicMemoryBank`` without touching
 disk or downloading sentence-transformers.
@@ -23,9 +23,10 @@ from paper2manim.emb import (
 from paper2manim.emb.manager import build_in_memory_emb
 from paper2manim.graphs.scene_graph import _reset_emb_cache
 from paper2manim.schemas import StoryboardModel, SummaryModel
+from tests.memory_writers import mock_lesson_distiller, mock_rationale_writer
 
 # --------------------------------------------------------------------------- #
-# Shared stub helpers (lifted / adapted from test_graph_mvp2_vlm.py)
+# Shared stub helpers (lifted / adapted from test_graph_generate_vlm.py)
 # --------------------------------------------------------------------------- #
 
 
@@ -99,7 +100,7 @@ def emb_pipeline(monkeypatch, tmp_path):
     from paper2manim.parsers import ParsedInput
 
     monkeypatch.setattr(
-        "paper2manim.graphs.mvp2.parse_local_pdf",
+        "paper2manim.graphs.generation.parse_local_pdf",
         lambda p: ParsedInput(text="# T", fmt="markdown", source="pdf:fake"),
     )
 
@@ -139,16 +140,16 @@ def emb_pipeline(monkeypatch, tmp_path):
             silent_video_path=str(out),
         )
 
-    monkeypatch.setattr("paper2manim.graphs.mvp2.assemble_voiceover", fake_assemble_voiceover)
+    monkeypatch.setattr("paper2manim.graphs.generation.assemble_voiceover", fake_assemble_voiceover)
 
     yield {"llm": llm}
     _reset_emb_cache()
 
 
 def _run(initial_state):
-    from paper2manim.graphs.mvp2 import build_mvp2_graph
+    from paper2manim.graphs.generation import build_generation_graph
 
-    g = build_mvp2_graph()
+    g = build_generation_graph()
     return g.invoke(initial_state, config={"recursion_limit": 80})
 
 
@@ -244,23 +245,21 @@ class TestEMBEnabledEmpty:
                 "max_visual_revisions": 2,
                 "visual_revision_decisions": [],
                 "emb_enabled": True,
-                "emb_theta_high": 0.0,  # accept no-VLM scenes
-                "emb_use_llm_distillers": False,
+                "emb_theta_high": 0.0,  # Still reject unscored scenes
                 "emb_instance": emb,
             }
         )
         assert out["final_video_path"].endswith("output.mp4")
-        # Coder prompt should not contain retrieval blocks (EMB was empty).
+        # Empty EMB retains both retrieval slots.
         for p in emb_pipeline["llm"]._coder_invocations:
-            assert "Reference Examples" not in p
-            assert "Known Pitfalls" not in p
-        # Consolidation should have written one success record for Scene1
-        # (theta_high=0 makes it acceptable even without VLM).
-        assert emb.count(polarity="success") == 1
+            assert "Reference Examples" in p
+            assert "Known Pitfalls" in p
+        # An unscored render cannot qualify as positive memory.
+        assert emb.count(polarity="success") == 0
         # emb_writes carries the consolidation report
         writes = out.get("emb_writes") or []
         assert len(writes) == 1
-        assert writes[0]["n_success_written"] == 1
+        assert writes[0]["n_success_written"] == 0
         assert writes[0]["n_failure_written"] == 0
 
 
@@ -380,7 +379,7 @@ class TestEMBPrepopulated:
 
 class TestEMBConsolidation:
     """Drive a run with a real visual revision so consolidation has something
-    to write. We use the scripted VLM review pattern from test_graph_mvp2_vlm
+    to write. We use the scripted VLM review pattern from test_graph_generate_vlm
     (revise → pass) plus a visual_revise stub that returns distinct code."""
 
     def test_visual_revision_produces_failure_record(self, emb_pipeline, monkeypatch, tmp_path):
@@ -437,7 +436,6 @@ class TestEMBConsolidation:
                 "visual_revision_decisions": [],
                 "emb_enabled": True,
                 "emb_theta_high": 85.0,
-                "emb_use_llm_distillers": False,
                 "emb_instance": emb,
             }
         )
@@ -453,14 +451,14 @@ class TestEMBConsolidation:
 
 
 # --------------------------------------------------------------------------- #
-# emb_use_llm_distillers wiring
+# LLM distillation wiring
 # --------------------------------------------------------------------------- #
 
 
 class TestEMBLLMDistillers:
-    """Verify the LLM distillers are invoked when --emb-llm-distill is set."""
+    """Verify the LLM distillers are invoked for eligible records by default."""
 
-    def test_llm_distillers_called_when_flag_on(self, emb_pipeline, monkeypatch, tmp_path):
+    def test_llm_distillers_called_by_default(self, emb_pipeline, monkeypatch, tmp_path):
         rationale_calls: list[str] = []
         lesson_calls: list[str] = []
 
@@ -488,6 +486,7 @@ class TestEMBLLMDistillers:
             fake_lesson_distiller,
         )
 
+        monkeypatch.setattr("paper2manim.graphs.scene_graph.review_scene", lambda scene, montage, **kw: {"decision": "pass", "scores": {"logic_flow": 90, "layout_occlusion": 90, "accuracy": 90}, "average_score": 90})
         emb = build_in_memory_emb()
         _run(
             {
@@ -502,13 +501,12 @@ class TestEMBLLMDistillers:
                 "max_retries": 2,
                 "quality": "l",
                 "skip_render": False,
-                "vlm_enabled": False,
+                "vlm_enabled": True,
                 "vlm_revision_count": 0,
                 "max_visual_revisions": 2,
                 "visual_revision_decisions": [],
                 "emb_enabled": True,
-                "emb_theta_high": 0.0,  # accept the no-VLM scene as success
-                "emb_use_llm_distillers": True,
+                "emb_theta_high": 85.0,
                 "emb_instance": emb,
             }
         )
@@ -519,3 +517,9 @@ class TestEMBLLMDistillers:
         assert emb.count(polarity="success") == 1
         rec = emb.all(polarity="success")[0]
         assert rec.body.rationale == "LLM_RATIONALE_OUTPUT"
+
+
+@pytest.fixture(autouse=True)
+def memory_writer_stubs(monkeypatch):
+    monkeypatch.setattr("paper2manim.agents.rationale_writer.write_rationale_llm", mock_rationale_writer)
+    monkeypatch.setattr("paper2manim.agents.lesson_distiller.distill_lesson_llm", mock_lesson_distiller)

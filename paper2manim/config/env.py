@@ -28,7 +28,7 @@ class Settings(BaseSettings):
     # Project paths and defaults
     PAPER2MANIM_RUNS_DIR: Path = PROJECT_ROOT / "runs"
     PAPER2MANIM_DEFAULT_MODEL: str = "flash"  # flash | pro
-    PAPER2MANIM_MAX_RETRIES: int = 3
+    PAPER2MANIM_MAX_RETRIES: int = 2
     PAPER2MANIM_QUALITY: str = "l"  # l | m | h
 
     # Optional: LangSmith

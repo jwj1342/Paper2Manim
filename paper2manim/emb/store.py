@@ -100,7 +100,7 @@ _MIGRATIONS_SQL = [
     "ALTER TABLE memory_records ADD COLUMN scene_id TEXT NOT NULL DEFAULT ''",
     "ALTER TABLE memory_records ADD COLUMN extraction_source TEXT NOT NULL DEFAULT ''",
     "ALTER TABLE memory_records ADD COLUMN transition_ordinal INTEGER NOT NULL DEFAULT 0",
-    # B6: domain column for RQ3 cross-domain freeze. Default '' keeps pre-B6
+    # Domain metadata migration. Default '' keeps older
     # records readable; new writes populate from Context.domain.
     "ALTER TABLE memory_records ADD COLUMN domain TEXT NOT NULL DEFAULT ''",
     "CREATE INDEX IF NOT EXISTS idx_domain ON memory_records(domain)",

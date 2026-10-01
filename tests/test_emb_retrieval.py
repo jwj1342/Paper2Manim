@@ -1,4 +1,4 @@
-"""Phase 3 tests: RAG retrieval + Coder prompt injection."""
+"""Memory retrieval tests: RAG retrieval + Coder prompt injection."""
 
 from __future__ import annotations
 
@@ -122,8 +122,8 @@ class TestRetrieveForScene:
 
 class TestRenderBlocks:
     def test_empty_records_yield_empty_string(self):
-        assert render_reference_examples_block([]) == ""
-        assert render_known_pitfalls_block([]) == ""
+        assert "[No entries available]" in render_reference_examples_block([])
+        assert "[No entries available]" in render_known_pitfalls_block([])
 
     def test_reference_examples_includes_rationale_and_code(self):
         emb = build_in_memory_emb()
@@ -192,6 +192,7 @@ class TestCoderPromptInjection:
 
     def _base_state(self) -> dict:
         return {
+            "emb_enabled": True,
             "storyboard": {
                 "title": "T",
                 "scenes": [
@@ -203,10 +204,10 @@ class TestCoderPromptInjection:
             "iter_count": 0,
         }
 
-    def test_prompt_without_records_omits_blocks(self):
+    def test_empty_bank_keeps_both_slots(self):
         prompt = _build_user_prompt(self._base_state())
-        assert "Reference Examples" not in prompt
-        assert "Known Pitfalls" not in prompt
+        assert "Reference Examples" in prompt
+        assert "Known Pitfalls" in prompt
 
     def test_prompt_with_success_records_includes_ref_block(self):
         emb = build_in_memory_emb()
@@ -216,7 +217,7 @@ class TestCoderPromptInjection:
         state["retrieved_success"] = bundle.to_state_dict()["success"]
         prompt = _build_user_prompt(state)
         assert "Reference Examples" in prompt
-        assert "Known Pitfalls" not in prompt
+        assert "Known Pitfalls" in prompt
         assert "from manim import *" in prompt
 
     def test_prompt_with_failure_records_includes_pitfalls_block(self):
@@ -227,7 +228,7 @@ class TestCoderPromptInjection:
         state["retrieved_failure"] = bundle.to_state_dict()["failure"]
         prompt = _build_user_prompt(state)
         assert "Known Pitfalls" in prompt
-        assert "Reference Examples" not in prompt
+        assert "Reference Examples" in prompt
         assert "bad()" in prompt
 
     def test_prompt_with_both_polarities(self):
@@ -243,13 +244,13 @@ class TestCoderPromptInjection:
         assert "Reference Examples" in prompt
         assert "Known Pitfalls" in prompt
 
-    def test_empty_lists_do_not_inject_blocks(self):
+    def test_empty_lists_keep_both_slots(self):
         state = self._base_state()
         state["retrieved_success"] = []
         state["retrieved_failure"] = []
         prompt = _build_user_prompt(state)
-        assert "Reference Examples" not in prompt
-        assert "Known Pitfalls" not in prompt
+        assert "Reference Examples" in prompt
+        assert "Known Pitfalls" in prompt
 
 
 class TestCoderNodeUsesRetrieval:
@@ -257,7 +258,7 @@ class TestCoderNodeUsesRetrieval:
 
     def test_coder_node_passes_retrieval_to_llm(self, mock_llm, fake_storyboard):
         mock_llm.invoke.return_value.content = "```python\nfrom manim import *\nclass PythagorasIntro(Scene):\n    def construct(self): pass\n```"
-        state = {
+        state = {"emb_enabled": True,
             "run_id": "rid_coder_inject",
             "storyboard": fake_storyboard,
             "current_scene_idx": 0,

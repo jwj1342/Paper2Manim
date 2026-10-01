@@ -37,6 +37,8 @@ def parse_arxiv(
         return ParsedInput(text=src.tex, fmt="latex", source=f"arxiv-src:{src.arxiv_id}")
     except SourceUnavailable as exc:
         log.warning("[parser] arXiv %s has no LaTeX source: %s", arxiv_id, exc)
+        if section:
+            raise SourceUnavailable("Section selection requires arXiv LaTeX source; pass extracted section text with --input.") from exc
         if not allow_pdf_fallback:
             raise
         with tempfile.TemporaryDirectory(prefix=f"arxiv_pdf_{arxiv_id.replace('/', '_')}_") as td:
@@ -52,7 +54,7 @@ def parse_local_pdf(pdf_path: str | Path) -> ParsedInput:
 
 
 def _parse_pdf_with_marker(pdf_path: str | Path) -> str:
-    # Local import: marker-pdf is an optional dep ([mvp2] extras).
+    # Local import: marker-pdf is an optional dep ([pdf] extras).
     from paper2manim.parsers.marker import parse_pdf
 
     return parse_pdf(pdf_path)

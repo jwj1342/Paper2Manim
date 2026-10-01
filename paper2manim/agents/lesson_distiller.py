@@ -1,15 +1,11 @@
 """LLM-driven Failure Pattern Lesson distiller.
 
-Plugs into :data:`paper2manim.emb.distill.LessonDistiller` so the §4.4b
+Plugs into :data:`paper2manim.emb.distill.LessonDistiller` so the negative memory
 consolidation path can substitute it for the cheap default. The LLM receives
 the before/after code + the validated diagnostic (traceback or VLM remark) and
 must return a JSON object matching :class:`paper2manim.emb.schema.FailureBody`.
 
-On any parse / API failure we fall back to
-:func:`paper2manim.emb.distill.default_lesson_distiller`, which still returns
-a valid FailureBody (built from line-diff heuristics). This means the
-consolidation pipeline is robust to LLM outages — we may store a less
-informative lesson, but we never lose the transition.
+Failed calls or invalid output do not create memory records.
 """
 
 from __future__ import annotations
@@ -22,7 +18,6 @@ from paper2manim.agents.vlm_scene_reviewer import _extract_first_json_object
 from paper2manim.emb.distill import (
     TextTransition,
     VisualTransition,
-    default_lesson_distiller,
 )
 from paper2manim.emb.schema import FailureBody
 from paper2manim.llm import get_llm
@@ -54,7 +49,9 @@ def _coerce_failure_body(payload: dict) -> FailureBody:
     error, so a partial LLM answer still produces a usable record.
     """
     return FailureBody(
-        trigger_pattern=_truncate(str(payload.get("trigger_pattern") or ""), _FIELD_LIMITS["trigger_pattern"])
+        trigger_pattern=_truncate(
+            str(payload.get("trigger_pattern") or ""), _FIELD_LIMITS["trigger_pattern"]
+        )
         or "unknown trigger",
         root_cause=_truncate(str(payload.get("root_cause") or ""), _FIELD_LIMITS["root_cause"])
         or "unknown root cause",
@@ -76,42 +73,21 @@ def distill_lesson_llm(
     transition: VisualTransition | TextTransition,
     scene_description: str,
 ) -> FailureBody:
-    """Call the LLM to produce a Lesson; fall back to heuristic on any error."""
+    """Distill a validated repair transition into a bounded lesson."""
     system = load_prompt("lesson_distiller")
     user = _build_user_prompt(transition, scene_description)
-    try:
-        llm = get_llm("render_fixer", temperature=0.0, max_tokens=1500)
-        raw = llm.invoke([("system", system), ("user", user)]).content
-        text = raw if isinstance(raw, str) else str(raw)
-    except Exception as exc:  # noqa: BLE001
-        log.warning(
-            "[lesson_distiller] LLM call failed for %s (%s); using default",
-            transition.scene,
-            exc,
-        )
-        return default_lesson_distiller(transition, scene_description)
+    llm = get_llm("render_fixer", temperature=0.0, max_tokens=1500)
+    raw = llm.invoke([("system", system), ("user", user)]).content
+    text = raw if isinstance(raw, str) else str(raw)
     blob = _extract_first_json_object(text)
     if not blob:
-        log.warning(
-            "[lesson_distiller] no JSON object in LLM output for %s; using default",
-            transition.scene,
-        )
-        return default_lesson_distiller(transition, scene_description)
-    try:
-        payload = json.loads(blob)
-    except json.JSONDecodeError as exc:
-        log.warning(
-            "[lesson_distiller] JSON parse failed for %s (%s); using default",
-            transition.scene,
-            exc,
-        )
-        return default_lesson_distiller(transition, scene_description)
-    if not isinstance(payload, dict):
-        log.warning(
-            "[lesson_distiller] LLM returned non-object JSON for %s; using default",
-            transition.scene,
-        )
-        return default_lesson_distiller(transition, scene_description)
+        raise ValueError("lesson_distiller returned no JSON object")
+    payload = json.loads(blob)
+    if not isinstance(payload, dict) or any(
+        not str(payload.get(key) or "").strip()
+        for key in ("trigger_pattern", "root_cause", "fix_recipe")
+    ):
+        raise ValueError("lesson_distiller omitted required lesson fields")
     return _coerce_failure_body(payload)
 
 
