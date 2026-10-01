@@ -40,6 +40,8 @@ cp .env.example .env
 
 Set `MANIMAGENT_API_KEY` in `.env`. The template binds every text and vision role to one GPT-5.5 endpoint. You can change `model`, `base_url`, `provider`, and `model_roles` for your service. The model bound to `vision_checker` must support image input and declare `supports_vision: true`.
 
+Model selection requires `config.yaml`. Missing or invalid configuration raises an error; the example is never loaded automatically.
+
 API keys written as `$ENV_VAR` are resolved from the environment or `.env`. Keep `.env` and `config.yaml` out of Git. Set `omit_temperature: true` if your endpoint rejects the temperature parameter.
 
 ## Generate an animation

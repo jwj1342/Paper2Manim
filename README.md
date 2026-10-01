@@ -24,6 +24,8 @@ cp .env.example .env
 
 Set `MANIMAGENT_API_KEY` in `.env`. The example configuration uses GPT-5.5 for all text and vision roles, following the paper. To use another model, update its name, endpoint, provider, and role bindings in `config.yaml`; the vision reviewer requires a vision-capable model.
 
+Model selection requires `config.yaml`. Missing or invalid configuration raises an error; the example is never loaded automatically.
+
 Generate an animation from local section text:
 
 ```bash

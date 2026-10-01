@@ -5,7 +5,6 @@ from __future__ import annotations
 from functools import lru_cache
 from pathlib import Path
 
-from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # env.py lives inside the ``config/`` package, so the repository root is three
@@ -21,13 +20,8 @@ class Settings(BaseSettings):
         case_sensitive=True,
     )
 
-    # MiMo (Xiaomi Token Plan)
-    MIMO_API_KEY: str = Field(default="", description="tp- prefixed key from MiMo-API.txt")
-    MIMO_BASE_URL: str = "https://token-plan-cn.xiaomimimo.com/v1"
-
     # Project paths and defaults
     PAPER2MANIM_RUNS_DIR: Path = PROJECT_ROOT / "runs"
-    PAPER2MANIM_DEFAULT_MODEL: str = "flash"  # flash | pro
     PAPER2MANIM_MAX_RETRIES: int = 2
     PAPER2MANIM_QUALITY: str = "l"  # l | m | h
 

@@ -3,7 +3,7 @@
 Two layers, both production-active:
 
 1. **Environment-based settings** (``env.py``) — pydantic-settings reading
-   ``.env`` for API keys (MIMO_*, LANGSMITH_*) and runtime defaults
+   ``.env`` for tracing settings (LANGSMITH_*) and runtime defaults
    (PAPER2MANIM_*). Exposed as the module-level ``settings`` singleton via
    ``from paper2manim.config.env import settings`` (we intentionally don't
    re-export the instance here to keep import paths explicit).
