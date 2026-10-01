@@ -1,7 +1,7 @@
 """Narrator agent: summary + storyboard -> structured NarrationPlan JSON.
 
-Runs before the scene fan-out in MVP 2.0 (between storyboarder and
-fan_out_scenes), and between storyboarder and coder in MVP 1.0. The narrator
+Runs before the scene fan-out in Generation pipeline (between storyboarder and
+fan_out_scenes). The narrator
 needs the global paper summary and the full storyboard to produce coherent
 multi-scene narration — it cannot run per-scene.
 

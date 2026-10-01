@@ -1,7 +1,4 @@
-"""Allow ``python -m paper2manim`` so subprocess-based runners
-(``scripts/run_experiment.py``, ``scripts/cross_domain.py``) don't depend on
-the ``paper2manim`` console script being on PATH.
-"""
+"""Module entry point: python -m paper2manim."""
 
 from paper2manim.cli import cli
 

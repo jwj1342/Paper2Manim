@@ -6,7 +6,7 @@ The pipeline has two layers:
    ``attempts/`` and ``vlm_frames/`` directories to extract every render +
    VLM review event into typed dataclasses. No LLM calls.
 
-2. **Record distillation** — applies the §4.4 quality gates (success ≥ θ_high,
+2. **Record distillation** — applies the consolidation quality gates (success ≥ θ_high,
    failure transitions must satisfy ``after_score > before_score``) and calls
    the injected ``rationale_writer`` / ``lesson_distiller`` to produce the
    final ``MemoryRecord`` bodies.
@@ -18,8 +18,10 @@ touching disk in either case beyond ``tmp_path``.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
+import math
 import re
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
@@ -62,7 +64,7 @@ class VLMReviewEvent:
     scene: str
     v_rev: int
     decision: str  # pass | revise | fail
-    scores: dict[str, int]
+    scores: dict[str, int | None]
     avg_score: float
     raw: dict[str, Any]
 
@@ -105,6 +107,7 @@ class TextTransition:
     error_category: str | None
     error_message: str
     traceback_tail: str
+    v_rev: int = 0
 
 
 @dataclass
@@ -113,7 +116,7 @@ class VisualTransition:
 
     Only emitted when ``after_score > before_score`` strictly. The graph also
     sometimes produces ``v -> v+1`` pairs where the second is *worse*; those
-    do not pass the §4.4b validation and are filtered here.
+    do not pass the negative memory validation and are filtered here.
     """
 
     scene: str
@@ -131,7 +134,7 @@ class VisualTransition:
 # --------------------------------------------------------------------------- #
 
 
-# Proposal §4.2 canonical 3-dim 0-100 schema, mirrored from
+# Three-axis scoring canonical 3-dim 0-100 schema, mirrored from
 # paper2manim/agents/vlm_scene_reviewer.py:_SCORE_KEYS. Keep these two in sync —
 # if the reviewer's schema drifts (back to 6-dim 1-5, etc.) the consolidate
 # pipeline silently writes zero records, which is exactly the bug fixed here.
@@ -145,24 +148,17 @@ _SCORE_KEYS = (
 def _avg_score(scores: dict[str, int | None] | None) -> float:
     """Mean of the three canonical dimensions on a 0–100 scale.
 
-    Skips ``None`` entries so a partial review (one dim missing) still produces
-    a defensible average over the present dims, matching how
-    :func:`paper2manim.agents.vlm_scene_reviewer.parse_vlm_response` treats
-    missing dimensions. Returns 0.0 only when *no* dim has a numeric value —
-    that case is what trips the consolidation gate, which is the intended
-    behavior for unparseable VLM output.
+    Incomplete or invalid scores cannot qualify for memory writes.
     """
-    if not scores:
+    if not scores or any(scores.get(k) is None for k in _SCORE_KEYS):
         return 0.0
-    nums: list[float] = []
-    for k, v in scores.items():
-        if k not in _SCORE_KEYS or v is None:
-            continue
-        try:
-            nums.append(float(v))
-        except (TypeError, ValueError):
-            continue
-    return sum(nums) / len(nums) if nums else 0.0
+    try:
+        values = [float(scores[k]) for k in _SCORE_KEYS]
+    except (TypeError, ValueError):
+        return 0.0
+    if any(not math.isfinite(v) or not 0 <= v <= 100 for v in values):
+        return 0.0
+    return sum(values) / 3
 
 
 def _read_trace(run_id: str) -> list[dict[str, Any]]:
@@ -204,16 +200,14 @@ def _read_attempt_code(run_id: str, scene: str, iter_idx: int, v_rev: int) -> st
 
 
 def _read_attempt_render_result(
-    run_id: str, scene: str, iter_idx: int
+    run_id: str, scene: str, iter_idx: int, v_rev: int = 0
 ) -> dict[str, Any] | None:
     """Load the ``.render.json`` sidecar for one (scene, iter) tuple.
 
-    Note: ``save_attempt_result`` only writes one file per (scene, iter); v_rev
-    values share that file, so for visual revisions the JSON reflects the
-    *latest* render of that text iter. Good enough for traceback excerpts on
-    text transitions; visual transitions use VLM scores instead.
+    Visual revisions use separate sidecars to preserve the chosen version.
     """
-    path = run_dir(run_id) / "attempts" / f"{iter_idx:02d}_{scene}.render.json"
+    name = scene if v_rev == 0 else f"{scene}_v{v_rev}"
+    path = run_dir(run_id) / "attempts" / f"{iter_idx:02d}_{name}.render.json"
     if not path.exists():
         return None
     try:
@@ -251,6 +245,17 @@ def parse_trace(run_id: str) -> dict[str, SceneEvents]:
             )
         elif node == "vlm_review":
             scores = ev.get("scores") or {}
+            try:
+                valid_scores = all(
+                    scores.get(k) is not None
+                    and math.isfinite(float(scores[k]))
+                    and 0 <= float(scores[k]) <= 100
+                    for k in _SCORE_KEYS
+                )
+            except (TypeError, ValueError):
+                valid_scores = False
+            if not valid_scores:
+                continue
             bucket.vlm_reviews.append(
                 VLMReviewEvent(
                     scene=scene,
@@ -269,29 +274,27 @@ def parse_trace(run_id: str) -> dict[str, SceneEvents]:
 # --------------------------------------------------------------------------- #
 
 
-def find_text_transitions(
-    run_id: str, scenes: Iterable[SceneEvents]
-) -> list[TextTransition]:
+def find_text_transitions(run_id: str, scenes: Iterable[SceneEvents]) -> list[TextTransition]:
     """Pairs of (render_error iter=k) → (render_success iter=k+1) within a scene.
 
-    Only emits when the success render is also at ``v_rev == 0`` — text
-    reflection always happens before any visual revision in our graph.
+    The pair must be adjacent attempts at the same visual revision.
     """
     out: list[TextTransition] = []
     for sc in scenes:
-        # Iter-ordered renders at v_rev 0 only (text reflection lane).
-        v0 = sorted(
-            [r for r in sc.renders if r.v_rev == 0],
-            key=lambda r: r.iter_idx,
-        )
-        for prev, nxt in zip(v0, v0[1:], strict=False):
-            if prev.status != "error" or nxt.status != "success":
+        renders = sc.renders
+        for prev, nxt in zip(renders, renders[1:], strict=False):
+            if (
+                prev.status != "error"
+                or nxt.status != "success"
+                or nxt.iter_idx != prev.iter_idx + 1
+                or nxt.v_rev != prev.v_rev
+            ):
                 continue
-            before_code = _read_attempt_code(run_id, sc.name, prev.iter_idx, 0)
-            after_code = _read_attempt_code(run_id, sc.name, nxt.iter_idx, 0)
+            before_code = _read_attempt_code(run_id, sc.name, prev.iter_idx, prev.v_rev)
+            after_code = _read_attempt_code(run_id, sc.name, nxt.iter_idx, nxt.v_rev)
             if not before_code or not after_code:
                 continue
-            rr = _read_attempt_render_result(run_id, sc.name, prev.iter_idx) or {}
+            rr = _read_attempt_render_result(run_id, sc.name, prev.iter_idx, prev.v_rev) or {}
             out.append(
                 TextTransition(
                     scene=sc.name,
@@ -299,6 +302,7 @@ def find_text_transitions(
                     after_iter=nxt.iter_idx,
                     before_code=before_code,
                     after_code=after_code,
+                    v_rev=prev.v_rev,
                     error_category=prev.category,
                     error_message=str(rr.get("error_message") or "")[:1000],
                     traceback_tail=str(rr.get("traceback_tail") or "")[:2000],
@@ -316,8 +320,8 @@ def find_visual_transitions(
 ) -> list[VisualTransition]:
     """VLM (v=k, score=s_k) → (v=k+1, score=s_{k+1}) where s_{k+1} − s_k ≥ ``min_margin``.
 
-    ``min_margin`` (default 5.0 on the 0–100 avg scale, mirroring the proposal
-    §4.2 schema) filters out marginal score wiggles that don't represent a real
+    ``min_margin`` (default 5.0 on the 0–100 avg scale, using the three-axis
+    score schema) filters out marginal score wiggles that don't represent a real
     learnable transition. Set to a tiny epsilon (e.g. 0.5) to keep every
     strictly-improved pair.
 
@@ -344,8 +348,10 @@ def find_visual_transitions(
                 continue
             if (nxt.avg_score - prev.avg_score) < min_margin:
                 continue
-            before_code = _read_attempt_code(run_id, sc.name, iter_for_scene, prev.v_rev)
-            after_code = _read_attempt_code(run_id, sc.name, iter_for_scene, nxt.v_rev)
+            before_iter = int(prev.raw.get("iter", iter_for_scene))
+            after_iter = int(nxt.raw.get("iter", iter_for_scene))
+            before_code = _read_attempt_code(run_id, sc.name, before_iter, prev.v_rev)
+            after_code = _read_attempt_code(run_id, sc.name, after_iter, nxt.v_rev)
             if not before_code or not after_code:
                 continue
             instr = str(prev.raw.get("revision_instruction") or "")
@@ -364,9 +370,7 @@ def find_visual_transitions(
     return out
 
 
-def find_scored_scenes(
-    run_id: str, scenes: Iterable[SceneEvents]
-) -> list[ScoredScene]:
+def find_scored_scenes(run_id: str, scenes: Iterable[SceneEvents]) -> list[ScoredScene]:
     """One ScoredScene per scene that ended with a successful render.
 
     Picks the highest-scoring VLM review (when present) as the final state.
@@ -382,7 +386,8 @@ def find_scored_scenes(
         text_iter = max(r.iter_idx for r in success_v0)
         # Pick best VLM review (highest avg). If none, fall back to v_rev=0 code.
         if sc.vlm_reviews:
-            best = max(sc.vlm_reviews, key=lambda r: r.avg_score)
+            best = max(sc.vlm_reviews, key=lambda r: (r.avg_score, -r.v_rev))
+            text_iter = int(best.raw.get("iter", text_iter))
             final_v_rev = best.v_rev
             final_score = best.avg_score
             had_vlm = True
@@ -392,10 +397,9 @@ def find_scored_scenes(
             had_vlm = False
         final_code = _read_attempt_code(run_id, sc.name, text_iter, final_v_rev)
         if not final_code:
-            # Fallback to v_rev=0 if the visual-revision file is gone.
-            final_code = _read_attempt_code(run_id, sc.name, text_iter, 0)
+            continue
         final_montage = _read_montage_path(run_id, sc.name, final_v_rev)
-        rr = _read_attempt_render_result(run_id, sc.name, text_iter) or {}
+        rr = _read_attempt_render_result(run_id, sc.name, text_iter, final_v_rev) or {}
         video = rr.get("video_path")
         out.append(
             ScoredScene(
@@ -423,72 +427,6 @@ LessonDistiller = Callable[[VisualTransition | TextTransition, str], FailureBody
 """Args: (transition, scene_description). Returns a FailureBody."""
 
 
-def default_rationale_writer(scored: ScoredScene, scene_description: str) -> str:
-    """Fallback rationale used when no LLM writer is injected.
-
-    Useful for offline bootstrap runs where we don't want to spend LLM tokens
-    on prose. The text retains enough structure (score + montage path) to be
-    informative when retrieved later.
-    """
-    montage = str(scored.final_montage_path) if scored.final_montage_path else "<none>"
-    return (
-        f"High-scoring scene '{scored.name}' (avg={scored.final_score:.2f}, "
-        f"v_rev={scored.final_v_rev}, montage={montage}). "
-        f"Scene description: {scene_description.strip()[:300]}"
-    )
-
-
-def default_lesson_distiller(
-    transition: VisualTransition | TextTransition, scene_description: str
-) -> FailureBody:
-    """Fallback lesson body — minimal but valid, no LLM needed.
-
-    Pulls anti / good examples by extracting the first significantly differing
-    lines from before / after code. Good enough as a placeholder until the
-    real ``agents.lesson_distiller`` is wired up.
-    """
-    if isinstance(transition, VisualTransition):
-        trigger = (
-            f"Visual scene with low layout/clarity score "
-            f"(avg={transition.before_score:.2f})"
-        )
-        root_cause = (
-            transition.revision_instruction.strip()[:300] or "VLM flagged for revision"
-        )
-        fix_recipe = f"Apply: {transition.revision_instruction.strip()[:300]}"
-        diagnostic = transition.revision_instruction
-    else:
-        trigger = (
-            f"Render fails with category={transition.error_category!r} "
-            f"during {scene_description.strip()[:120]}"
-        )
-        root_cause = transition.error_message[:300] or "render error"
-        fix_recipe = "See code_good_example for the working version."
-        diagnostic = transition.traceback_tail
-    anti = _first_distinct_lines(transition.before_code, transition.after_code, n=8)
-    good = _first_distinct_lines(transition.after_code, transition.before_code, n=8)
-    return FailureBody(
-        trigger_pattern=trigger,
-        root_cause=root_cause,
-        fix_recipe=fix_recipe,
-        code_anti_example=anti,
-        code_good_example=good,
-        vlm_diagnostic=diagnostic[:1000],
-    )
-
-
-def _first_distinct_lines(a: str, b: str, *, n: int = 8) -> str:
-    """Return up to ``n`` lines from ``a`` that don't appear verbatim in ``b``."""
-    bset = set(b.splitlines())
-    out: list[str] = []
-    for line in a.splitlines():
-        if line.strip() and line not in bset:
-            out.append(line)
-            if len(out) >= n:
-                break
-    return "\n".join(out)
-
-
 def _scene_description_lookup(state: dict[str, Any] | None) -> dict[str, str]:
     """Build {scene_name -> description} from a PaperState-like dict."""
     if not state:
@@ -502,10 +440,10 @@ def _scene_description_lookup(state: dict[str, Any] | None) -> dict[str, str]:
 
 
 def _domain_tags_from_text(text: str) -> list[str]:
-    """Cheap keyword-based domain tagger — used until we wire a real classifier.
+    """Cheap keyword-based domain tagger — used for optional fine-grained tags.
 
     Picks at most three tags from a small hand-curated vocabulary that maps to
-    the three target domains in the proposal (CS / math / physics).
+    the three target domains in the common input domains.
     """
     text_l = text.lower()
     candidates = [
@@ -530,7 +468,7 @@ def _domain_tags_from_text(text: str) -> list[str]:
 def _scene_role_from_name(name: str) -> str:
     """Heuristic scene_role: looks at the storyboarder's PascalCase scene name.
 
-    The proposal §4.4 keeps ``scene_role`` coarse so retrieval can ablate by
+    The memory method keeps ``scene_role`` coarse so retrieval can ablate by
     section type (background / method / experiment / conclusion). Storyboarder
     output tends to embed these tokens in scene names (e.g. ``TitleIntro``,
     ``ScaledDotProductAttention``, ``TakeawayConclusion``). When the name
@@ -563,31 +501,44 @@ def distill_success_records(
 ) -> list[MemoryRecord]:
     """One ``MemoryRecord`` per scene whose final avg score ≥ ``theta_high``.
 
-    Default ``theta_high=85.0`` matches the proposal §4.2 0–100 schema; it sits
-    just below the §4.3 auto-pass threshold (90) so scenes the VLM
-    bypass-passes also qualify as success records. If ``theta_high <= 0``,
-    scenes without VLM scoring still qualify (useful for MVP 2.0-style
-    bootstrap where the VLM loop is disabled).
+    A valid three-axis VLM score is required even if the threshold is zero.
+    The default threshold is 85 on the 0–100 scale.
 
-    ``domain`` (B6) is stamped on every Context for RQ3 cross-domain
-    experiments. Empty string = "untagged".
+    ``domain`` labels the context of each record. Empty string = "untagged".
     """
-    rw = rationale_writer or default_rationale_writer
+    if rationale_writer is None:
+        from paper2manim.agents.rationale_writer import write_rationale_llm
+
+        rationale_writer = write_rationale_llm
+    rw = rationale_writer
     desc = _scene_description_lookup(state)
     scenes = parse_trace(run_id)
     scored = find_scored_scenes(run_id, scenes.values())
     out: list[MemoryRecord] = []
     for sc in scored:
-        if theta_high > 0 and sc.final_score < theta_high:
+        if not sc.had_vlm_review or sc.final_score < theta_high:
             continue
         if not sc.final_code:
             continue
         scene_desc = desc.get(sc.name, "")
-        rationale = rw(sc, scene_desc)
-        body = SuccessBody(rationale=rationale, code_full=sc.final_code)
+        try:
+            rationale = rw(sc, scene_desc)
+        except Exception as exc:
+            log.warning("[distill] skipping rationale for %s: %s", sc.name, exc)
+            continue
+        if not rationale.strip():
+            continue
+        frame_hash = (
+            hashlib.sha256(sc.final_montage_path.read_bytes()).hexdigest()
+            if sc.final_montage_path
+            else ""
+        )
+        body = SuccessBody(
+            rationale=rationale[:400], code_full=sc.final_code, frame_hash=frame_hash
+        )
         ctx = Context(
-            task_text=scene_desc or sc.name,
-            scene_role=_scene_role_from_name(sc.name),
+            task_text=(state or {}).get("task_text") or scene_desc or sc.name,
+            scene_role=(state or {}).get("scene_role") or _scene_role_from_name(sc.name),
             domain_tags=_domain_tags_from_text(scene_desc or sc.name),
             domain=domain,
             source_paper=source_paper,
@@ -623,20 +574,22 @@ def distill_failure_records(
     """One record per validated transition. ``after_score − before_score ≥
     failure_min_margin`` enforced inside :func:`find_visual_transitions`; text
     transitions are validated by ``error → success``. Default 5.0 is on the
-    proposal §4.2 0–100 scale.
+    three-axis scoring 0–100 scale.
 
-    ``domain`` (B6) stamps every Context for RQ3 cross-domain experiments.
+    ``domain`` labels the context of each record.
     """
-    ld = lesson_distiller or default_lesson_distiller
+    if lesson_distiller is None:
+        from paper2manim.agents.lesson_distiller import distill_lesson_llm
+
+        lesson_distiller = distill_lesson_llm
+    ld = lesson_distiller
     desc = _scene_description_lookup(state)
     scenes = parse_trace(run_id)
     text_ts: list[TextTransition] = (
         find_text_transitions(run_id, scenes.values()) if include_text_transitions else []
     )
     visual_ts: list[VisualTransition] = (
-        find_visual_transitions(
-            run_id, scenes.values(), min_margin=failure_min_margin
-        )
+        find_visual_transitions(run_id, scenes.values(), min_margin=failure_min_margin)
         if include_visual_transitions
         else []
     )
@@ -644,10 +597,14 @@ def distill_failure_records(
     out: list[MemoryRecord] = []
     for vt in visual_ts:
         scene_desc = desc.get(vt.scene, "")
-        body = ld(vt, scene_desc)
+        try:
+            body = ld(vt, scene_desc)
+        except Exception as exc:
+            log.warning("[distill] skipping visual lesson for %s: %s", vt.scene, exc)
+            continue
         ctx = Context(
-            task_text=scene_desc or vt.scene,
-            scene_role=_scene_role_from_name(vt.scene),
+            task_text=(state or {}).get("task_text") or scene_desc or vt.scene,
+            scene_role=(state or {}).get("scene_role") or _scene_role_from_name(vt.scene),
             domain_tags=_domain_tags_from_text(scene_desc or vt.scene),
             domain=domain,
             source_paper=source_paper,
@@ -668,10 +625,14 @@ def distill_failure_records(
         out.append(MemoryRecord(polarity="failure", context=ctx, body=body, provenance=prov))
     for tt in text_ts:
         scene_desc = desc.get(tt.scene, "")
-        body = ld(tt, scene_desc)
+        try:
+            body = ld(tt, scene_desc)
+        except Exception as exc:
+            log.warning("[distill] skipping text lesson for %s: %s", tt.scene, exc)
+            continue
         ctx = Context(
-            task_text=scene_desc or tt.scene,
-            scene_role=_scene_role_from_name(tt.scene),
+            task_text=(state or {}).get("task_text") or scene_desc or tt.scene,
+            scene_role=(state or {}).get("scene_role") or _scene_role_from_name(tt.scene),
             domain_tags=_domain_tags_from_text(scene_desc or tt.scene),
             domain=domain,
             source_paper=source_paper,
@@ -731,17 +692,12 @@ def consolidate_run(
     skip_success: bool = False,
     skip_failure: bool = False,
 ) -> ConsolidationReport:
-    """End-to-end §4.4 sink for one paper-section run.
+    """End-to-end consolidation sink for one paper-section run.
 
     Reads trace.jsonl + attempts/ from disk; calls the injected writers (which
     may hit an LLM/VLM) to materialize bodies; writes every produced record to
-    ``emb``. Idempotent over repeated calls within a process **only insofar as
-    new records are appended with fresh UUIDs** — there is no dedupe yet.
-
-    ``domain`` (B6) stamps every Context for RQ3 cross-domain. ``skip_success``
-    / ``skip_failure`` (B6, §8.3 Ablation E) bypass the corresponding distill
-    call entirely so the channel ablation works on the WRITE side too —
-    paired with the same flags in :func:`retrieve_for_scene` for the READ side.
+    ``emb``. Provenance keys deduplicate repeated consolidation. Channel
+    switches apply to both retrieval and writes.
     """
     report = ConsolidationReport()
     succ: list[MemoryRecord] = []
@@ -802,7 +758,7 @@ def infer_source_metadata(state: dict[str, Any] | None) -> tuple[str, str]:
     """Guess ``(source_paper, source_section)`` from a finished PaperState.
 
     Returns empty strings when the input kind doesn't carry an arxiv id (e.g.
-    raw text MVP 1.0 runs).
+    raw text section-text input runs).
     """
     if not state:
         return "", ""

@@ -1,4 +1,4 @@
-"""Graph-level tests for voiceover narration + TTS in MVP1 and MVP2.
+"""Graph-level tests for voiceover narration + TTS in the generation pipeline.
 
 These tests use mock TTS (provider=mock) so they don't require real API keys.
 ffmpeg/ffprobe must be on PATH for AV assembly steps.
@@ -13,8 +13,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from paper2manim.config.model_config import TTSConfig
-from paper2manim.graphs.mvp1 import assemble_av_node as mvp1_assemble_av
-from paper2manim.graphs.mvp2 import assemble_av_node as mvp2_assemble_av
+from paper2manim.graphs.generation import assemble_av_node as generate_assemble_av
 from paper2manim.schemas.narration import NarrationPlanModel
 from paper2manim.state import PaperState
 
@@ -47,10 +46,7 @@ def _mock_tts_config(monkeypatch):
         base_url="", voice="alloy",
     )
     monkeypatch.setattr(
-        "paper2manim.graphs.mvp2.get_tts_config", lambda: cfg
-    )
-    monkeypatch.setattr(
-        "paper2manim.graphs.mvp1.get_tts_config", lambda: cfg
+        "paper2manim.graphs.generation.get_tts_config", lambda: cfg
     )
 
 
@@ -60,10 +56,7 @@ def _mock_run_dir(monkeypatch, tmp_path):
     fake_run_dir.mkdir(parents=True)
     (fake_run_dir / "final").mkdir(exist_ok=True)
     monkeypatch.setattr(
-        "paper2manim.graphs.mvp1.run_dir", lambda rid: fake_run_dir
-    )
-    monkeypatch.setattr(
-        "paper2manim.graphs.mvp2.run_dir", lambda rid: fake_run_dir
+        "paper2manim.graphs.generation.run_dir", lambda rid: fake_run_dir
     )
     return fake_run_dir
 
@@ -76,9 +69,9 @@ def _mock_run_dir(monkeypatch, tmp_path):
 class TestVoiceoverOffSkipsNarrator:
     """fix-plan §Mod 1: --no-voiceover must not call narrator."""
 
-    def test_mvp2_voiceover_off_routes_directly_to_fanout(self, monkeypatch):
-        """MVP2: _post_storyboarder returns Send list when voiceover off."""
-        from paper2manim.graphs.mvp2 import _post_storyboarder
+    def test_generate_voiceover_off_routes_directly_to_fanout(self, monkeypatch):
+        """Generation: _post_storyboarder returns Send list when voiceover off."""
+        from paper2manim.graphs.generation import _post_storyboarder
 
         state: PaperState = {
             "voiceover_enabled": False,
@@ -92,9 +85,9 @@ class TestVoiceoverOffSkipsNarrator:
         assert isinstance(result, list), f"Expected Send list, got {result!r}"
         assert len(result) == 1
 
-    def test_mvp2_voiceover_on_routes_to_narrator(self, monkeypatch):
-        """MVP2: _post_storyboarder returns 'narrator' when voiceover on."""
-        from paper2manim.graphs.mvp2 import _post_storyboarder
+    def test_generate_voiceover_on_routes_to_narrator(self, monkeypatch):
+        """Generation: _post_storyboarder returns 'narrator' when voiceover on."""
+        from paper2manim.graphs.generation import _post_storyboarder
 
         state: PaperState = {
             "voiceover_enabled": True,
@@ -106,27 +99,12 @@ class TestVoiceoverOffSkipsNarrator:
         result = _post_storyboarder(state)
         assert result == "narrator"
 
-    def test_mvp1_voiceover_off_routes_to_coder(self):
-        """MVP1: _post_storyboarder returns 'coder' when voiceover off."""
-        from paper2manim.graphs.mvp1 import _post_storyboarder
-
-        state: PaperState = {
-            "voiceover_enabled": False,
-            "storyboard": {
-                "title": "T", "scenes": [{"name": "S", "description": "d", "duration_hint": 5.0}]
-            },
-            "attempts": [],
-        }
-        result = _post_storyboarder(state)
-        assert result == "coder"
-
-
 # --------------------------------------------------------------------------- #
-# MVP1 voiceover assembly
+# Single-scene voiceover assembly
 # --------------------------------------------------------------------------- #
 
 
-class TestMVP1Voiceover:
+class TestSingleSceneVoiceover:
     @pytest.fixture(autouse=True)
     def _setup(self, monkeypatch):
         _mock_tts_config(monkeypatch)
@@ -145,7 +123,7 @@ class TestMVP1Voiceover:
             ],
             "attempts": [],
         }
-        out = mvp1_assemble_av(state)
+        out = generate_assemble_av(state)
         assert "fatal_error" not in out
 
     def test_assemble_av_single_scene_narrated(self, monkeypatch, tmp_path):
@@ -169,7 +147,7 @@ class TestMVP1Voiceover:
             ],
             "attempts": [],
         }
-        out = mvp1_assemble_av(state)
+        out = generate_assemble_av(state)
         assert "fatal_error" not in out, out.get("fatal_error")
         assert out.get("narrated_video_path") is not None
 
@@ -196,18 +174,18 @@ class TestMVP1Voiceover:
             ],
             "attempts": [],
         }
-        out = mvp1_assemble_av(state)
+        out = generate_assemble_av(state)
         assert "fatal_error" not in out, out.get("fatal_error")
         # narration_plan=None → voiceover off path → just concat.
         assert out.get("final_video_path") is not None
 
 
 # --------------------------------------------------------------------------- #
-# MVP2 voiceover assembly
+# Generation voiceover assembly
 # --------------------------------------------------------------------------- #
 
 
-class TestMVP2Voiceover:
+class TestGenerationVoiceover:
     @pytest.fixture(autouse=True)
     def _setup(self, monkeypatch):
         _mock_tts_config(monkeypatch)
@@ -225,7 +203,7 @@ class TestMVP2Voiceover:
             ],
             "attempts": [],
         }
-        out = mvp2_assemble_av(state)
+        out = generate_assemble_av(state)
         assert "fatal_error" not in out
         assert out.get("final_video_path") is not None
 
@@ -255,7 +233,7 @@ class TestMVP2Voiceover:
             ],
             "attempts": [],
         }
-        out = mvp2_assemble_av(state)
+        out = generate_assemble_av(state)
         assert "fatal_error" not in out, out.get("fatal_error")
         assert out.get("narrated_video_path") is not None
 
@@ -286,7 +264,7 @@ class TestMVP2Voiceover:
             ],
             "attempts": [],
         }
-        out = mvp2_assemble_av(state)
+        out = generate_assemble_av(state)
         assert "fatal_error" not in out
         # Should have warnings about missing narration.
         assert out.get("voiceover_warnings")
@@ -311,7 +289,7 @@ class TestMVP2Voiceover:
             ],
             "attempts": [],
         }
-        out = mvp2_assemble_av(state)
+        out = generate_assemble_av(state)
         assert "fatal_error" in out
         assert "no narration" in out["fatal_error"]
 
@@ -337,7 +315,7 @@ class TestMVP2Voiceover:
             ],
             "attempts": [],
         }
-        out = mvp2_assemble_av(state)
+        out = generate_assemble_av(state)
         assert "fatal_error" in out
         assert "empty narration" in out["fatal_error"]
 

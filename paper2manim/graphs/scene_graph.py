@@ -1,13 +1,13 @@
 """Per-scene LangGraph subgraph.
 
-The MVP 2.0 graph fans out scenes through ``langgraph.types.Send``. Each scene
+The Generation pipeline graph fans out scenes through ``langgraph.types.Send``. Each scene
 runs its own compiled :class:`StateGraph` over a :class:`SceneState` — the
 inner loop of coder / render / reviewer / VLM / visual-revise. Splitting the
 per-scene work into its own graph lets multiple scenes run concurrently in
 LangGraph's thread pool while sharing zero mutable state through the parent
 ``PaperState`` (everything passes through reducers).
 
-Wire-up belongs in :mod:`paper2manim.graphs.mvp2`; this module is intentionally
+Wire-up belongs in :mod:`paper2manim.graphs.generation`; this module is intentionally
 self-contained so it can be unit-tested in isolation.
 """
 
@@ -70,7 +70,7 @@ class SceneState(TypedDict, total=False):
     last_visual_review), and (c) reducer-accumulated within-scene records
     (``attempts``, ``visual_revision_decisions``). The outputs that bubble up
     to ``PaperState`` (rendered_videos, skipped_scenes, scene_reports) are
-    materialized by the Send target wrapper in :mod:`mvp2`.
+    materialized by the Send target wrapper in :mod:`paper2manim.graphs.generation`.
     """
 
     # ---- Inputs (set by fan_out_scenes; read-only inside the subgraph) ----
@@ -89,19 +89,25 @@ class SceneState(TypedDict, total=False):
     emb_store_path: str | None
     emb_use_faiss: bool
     emb_use_real_embedder: bool
+    task_text: str
+    scene_role: str
+    emb_readonly: bool
+    emb_k_success: int
+    emb_k_failure: int
     emb_instance: object | None
-    # B6 channel ablation flags forwarded from PaperState; default False in
-    # ``_make_scene_payload`` so old call sites don't have to opt in.
+    # Optional channel switches forwarded from the parent graph.
     emb_no_success_channel: bool
     emb_no_failure_channel: bool
 
     # ---- Per-scene mutables (managed by inner loop) ----
     current_code: str | None
     iter_count: int
+    text_retry_count: int
     error_feedback: dict | None
     vlm_revision_count: int
     current_montage_path: str | None
     last_visual_review: dict | None
+    visual_revision_error: str | None
 
     # ---- Per-scene retrieved (output of emb_retrieve) ----
     retrieved_success: list[dict]
@@ -119,7 +125,7 @@ class SceneState(TypedDict, total=False):
     # rendition happened to be last. Each entry, appended once per
     # ``vlm_review`` invocation:
     #   {scene, v_rev, video_path, code, avg_score, decision}
-    # Without this, the v1=85 → v2=60 regression case (docs/vlm_experiment.md)
+    # Without this, a v1=85 → v2=60 regression
     # would ship the worse v2 video. EMB.success already picks the
     # highest-VLM-avg v_rev (emb/distill.py:find_scored_scenes), so post-fix
     # the same v_rev is in both the final video and the EMB record.
@@ -141,27 +147,19 @@ def _emb_for_state(state: SceneState) -> EpisodicMemoryBank | None:
     path = state.get("emb_store_path")
     if not path:
         return None
-    path_s = str(path)
+    path_s = f"{Path(path).resolve()}|faiss={state.get('emb_use_faiss', True)}|real={state.get('emb_use_real_embedder', True)}"
     with _EMB_CACHE_LOCK:
         if path_s not in _EMB_CACHE:
-            try:
-                _EMB_CACHE[path_s] = build_default_emb(
-                    path_s,
-                    use_faiss=bool(state.get("emb_use_faiss", True)),
-                    use_real_embedder=bool(state.get("emb_use_real_embedder", True)),
-                )
-            except Exception as exc:  # noqa: BLE001
-                log.warning(
-                    "[emb] build_default_emb failed for %s: %s — disabling EMB",
-                    path_s,
-                    exc,
-                )
-                return None
+            _EMB_CACHE[path_s] = build_default_emb(
+                str(path),
+                use_faiss=bool(state.get("emb_use_faiss", True)),
+                use_real_embedder=bool(state.get("emb_use_real_embedder", True)),
+            )
         return _EMB_CACHE[path_s]
 
 
 # --------------------------------------------------------------------------- #
-# Per-scene node functions (migrated from mvp2.py)
+# Per-scene node functions
 # --------------------------------------------------------------------------- #
 
 
@@ -172,15 +170,21 @@ def emb_retrieve_node(state: SceneState) -> dict[str, Any]:
     if emb is None:
         return empty
     scene = state.get("scene") or {}
-    scene_text = (scene.get("description") or scene.get("name") or "").strip()
+    scene_text = (
+        (state.get("task_text") or scene.get("description") or scene.get("name") or "")
+        + "\nScene role: "
+        + state.get("scene_role", "BACKGROUND")
+    ).strip()
     if not scene_text:
         return empty
     bundle = retrieve_for_scene(
-        emb, scene_text, k_success=2, k_failure=3,
+        emb,
+        scene_text,
+        k_success=state.get("emb_k_success", 2),
+        k_failure=state.get("emb_k_failure", 3),
+        bump_hit=not bool(state.get("emb_readonly", False)),
         skip_success=bool(state.get("emb_no_success_channel", False)),
         skip_failure=bool(state.get("emb_no_failure_channel", False)),
-        # Cross-domain freeze (RQ3) leaves domain_filter=None so Domain B
-        # retrieves Domain A's records. Pass it explicitly when ablating.
     )
     wire = bundle.to_state_dict()
     try:
@@ -239,7 +243,8 @@ def render_node(state: SceneState) -> dict[str, Any]:
         quality=state.get("quality", "l"),
         workdir=workdir,
     )
-    save_attempt_result(state["run_id"], scene["name"], iter_idx, rr)
+    artifact_scene = scene["name"] if vrev == 0 else f"{scene['name']}_v{vrev}"
+    save_attempt_result(state["run_id"], artifact_scene, iter_idx, rr)
     append_trace(
         state["run_id"],
         "render",
@@ -249,10 +254,12 @@ def render_node(state: SceneState) -> dict[str, Any]:
             "v_rev": vrev,
             "status": rr["status"],
             "category": rr.get("category"),
+            "video_path": rr.get("video_path"),
         },
     )
     attempt: Attempt = {
         "iter": iter_idx,
+        "v_rev": vrev,
         "scene": scene["name"],
         "code": state["current_code"],
         "render_result": rr,
@@ -296,16 +303,14 @@ def vlm_review_node(state: SceneState) -> dict[str, Any]:
     # the rendition record points at the actual mp4 ``run_scene_node`` would
     # otherwise ship.
     attempts = state.get("attempts", [])
-    last_video = (
-        (attempts[-1].get("render_result") or {}).get("video_path") if attempts else None
-    )
+    last_video = (attempts[-1].get("render_result") or {}).get("video_path") if attempts else None
     current_code = state.get("current_code") or ""
 
     if not montage or not scene:
-        log.warning("[vlm_review] missing montage or scene; auto-pass")
+        log.warning("[vlm_review] missing montage or scene; visual review unavailable")
         review = {
             "scene_id": scene_name,
-            "decision": "pass",
+            "decision": "fail",
             "scores": {},
             "revision_instruction": "",
         }
@@ -315,21 +320,23 @@ def vlm_review_node(state: SceneState) -> dict[str, Any]:
         # for this scene.
         return {
             "last_visual_review": review,
-            "visual_revision_decisions": [{"scene": scene_name, "decision": "pass"}],
+            "visual_revision_decisions": [{"scene": scene_name, "decision": "fail"}],
         }
     summary = state.get("summary")
     try:
-        review = review_scene(scene, montage, summary=summary, scene_idx=state.get("current_scene_idx", 0))
+        review = review_scene(
+            scene, montage, summary=summary, scene_idx=state.get("current_scene_idx", 0)
+        )
     except Exception as exc:  # noqa: BLE001
         log.warning(
-            "[vlm_review] %s raised %s: %s — auto-pass to keep graph moving",
+            "[vlm_review] %s raised %s: %s — visual review unavailable",
             scene.get("name"),
             type(exc).__name__,
             exc,
         )
         review = {
             "scene_id": scene.get("name"),
-            "decision": "pass",
+            "decision": "fail",
             "scores": {},
             "revision_instruction": "",
             "raw_response": f"{type(exc).__name__}: {exc}",
@@ -342,6 +349,8 @@ def vlm_review_node(state: SceneState) -> dict[str, Any]:
             "v_rev": v_rev,
             "decision": review.get("decision"),
             "scores": review.get("scores"),
+            "iter": state.get("iter_count", 0),
+            "revision_instruction": review.get("revision_instruction", ""),
         },
     )
     rendition = {
@@ -350,12 +359,12 @@ def vlm_review_node(state: SceneState) -> dict[str, Any]:
         "video_path": last_video,
         "code": current_code,
         "avg_score": review.get("average_score"),
-        "decision": str(review.get("decision", "pass")),
+        "decision": str(review.get("decision", "fail")),
     }
     return {
         "last_visual_review": review,
         "visual_revision_decisions": [
-            {"scene": scene_name, "decision": str(review.get("decision", "pass"))}
+            {"scene": scene_name, "decision": str(review.get("decision", "fail"))}
         ],
         "scene_renditions": [rendition],
     }
@@ -372,8 +381,8 @@ def visual_revise_node(state: SceneState) -> dict[str, Any]:
     try:
         new_code = revise_code(scene, current, review, summary=state.get("summary"))
     except Exception as exc:  # noqa: BLE001
-        log.warning("[visual_revise] %s raised %s — keeping prior code", scene["name"], exc)
-        new_code = current
+        log.warning("[visual_revise] %s failed: %s", scene["name"], exc)
+        return {"visual_revision_error": str(exc)}
     if state.get("run_id"):
         save_attempt_code(
             state["run_id"], f"{scene['name']}_v{new_count}", state.get("iter_count", 0), new_code
@@ -397,7 +406,7 @@ def post_reviewer_route(state: SceneState) -> Literal["coder", "frame_sampler", 
         if state.get("vlm_enabled") and rr.get("video_path"):
             return "frame_sampler"
         return "end"
-    if state.get("iter_count", 0) >= state.get("max_retries", 3):
+    if state.get("iter_count", 0) > state.get("max_retries", 2):
         return "end"
     ef = state.get("error_feedback") or {}
     if ef.get("decision") == "give_up":
@@ -411,9 +420,7 @@ def post_vlm_route(state: SceneState) -> Literal["visual_revise", "end"]:
     if decision == "pass":
         return "end"
     if decision == "fail":
-        # Soft-fail: render succeeded, so the scene is "done" for the
-        # rendered_videos list. Strict-fail would require a CLI flag, kept
-        # consistent with the original mvp2.py behavior.
+        # Stop revision; the parent selects the best available rendition.
         return "end"
     # decision == "revise"
     if state.get("vlm_revision_count", 0) >= state.get("max_visual_revisions", 2):
@@ -430,7 +437,7 @@ def post_vlm_route(state: SceneState) -> Literal["visual_revise", "end"]:
 def build_scene_graph():
     """Compile the per-scene subgraph.
 
-    Topology mirrors the original mvp2 inner loop:
+    Scene loop:
     ``emb_retrieve → coder → render → reviewer →
         (retry → coder | frame_sampler → vlm_review →
             (visual_revise → render | END))``
@@ -459,7 +466,11 @@ def build_scene_graph():
         post_vlm_route,
         {"visual_revise": "visual_revise", "end": END},
     )
-    g.add_edge("visual_revise", "render")
+    g.add_conditional_edges(
+        "visual_revise",
+        lambda state: "end" if state.get("visual_revision_error") else "render",
+        {"end": END, "render": "render"},
+    )
     return g.compile()
 
 

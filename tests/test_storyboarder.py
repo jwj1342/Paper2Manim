@@ -24,8 +24,6 @@ def test_storyboarder_returns_storyboard(mock_llm):
     state = {"run_id": "test-run", "raw_text": "Pythagorean theorem", "attempts": []}
     out = storyboarder_node(state)
     assert out["storyboard"]["title"] == "Pythagoras"
-    assert out["current_scene_idx"] == 0
-    assert out["iter_count"] == 0
 
 
 def test_storyboarder_fatal_when_no_input(mock_llm):

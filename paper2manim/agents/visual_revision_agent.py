@@ -42,9 +42,7 @@ def revise_code(
     system_prompt = load_prompt("visual_revision_agent")
     scene_id = scene.get("name") or "<unknown>"
     parts: list[str] = []
-    parts.append(
-        f"## SceneSpec\n```json\n{_compact_json({'name': scene_id, 'description': scene.get('description', '')})}\n```\n"
-    )
+    parts.append(f"## SceneSpec\n```json\n{_compact_json(scene)}\n```\n")
     if summary:
         parts.append(f"## Paper summary\n```json\n{_compact_json(summary)}\n```\n")
     parts.append("## Current Manim code (renders but looks bad)\n```python\n")

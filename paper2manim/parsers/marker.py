@@ -1,4 +1,4 @@
-"""MVP 2.0 PDF parser via Marker (VikParuchuri/marker)."""
+"""Generation pipeline PDF parser via Marker (VikParuchuri/marker)."""
 
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ def parse_pdf(pdf_path: str | Path) -> str:
     """Parse a PDF into markdown (with $...$ formulas) using Marker.
 
     Marker downloads ~3GB of model weights on first call (cached under ~/.cache/huggingface).
-    Pre-warm by running once on a login node before sbatch.
+    The first call requires network access to download the weights.
     """
     pdf_path = Path(pdf_path)
     if not pdf_path.exists():
@@ -24,8 +24,8 @@ def parse_pdf(pdf_path: str | Path) -> str:
         from marker.output import text_from_rendered
     except ImportError as e:
         raise ImportError(
-            "marker-pdf is not installed. Install MVP 2.0 deps: "
-            "pip install -e .[mvp2]  (or PAPER2MANIM_MVP=2 source scripts/setup_env.sh)"
+            "marker-pdf is not installed. Install Generation pipeline deps: "
+            "pip install -e .[pdf]  (or PAPER2MANIM_PDF=1 source scripts/setup_env.sh)"
         ) from e
 
     log.info("[marker] parsing %s (will load models if first run)", pdf_path)

@@ -1,4 +1,4 @@
-"""End-to-end smoke test for the MVP 1.0 graph (mocks LLM and render)."""
+"""End-to-end tests for section text in the generation graph (mocks LLM and render)."""
 
 from unittest.mock import MagicMock
 
@@ -30,12 +30,12 @@ def stub_llm(monkeypatch):
     return llm
 
 
-def test_mvp1_graph_skip_render(stub_llm):
-    from paper2manim.graphs.mvp1 import build_mvp1_graph
+def test_text_graph_skip_render(stub_llm):
+    from paper2manim.graphs.generation import build_generation_graph
 
-    g = build_mvp1_graph()
+    g = build_generation_graph()
     state = {
-        "run_id": "test-run-mvp1",
+        "run_id": "test-run-text",
         "input_kind": "text",
         "raw_text": "hello",
         "attempts": [],
@@ -48,14 +48,16 @@ def test_mvp1_graph_skip_render(stub_llm):
     }
     out = g.invoke(state)
     assert out["storyboard"]["title"] == "Test"
-    assert out["current_code"].startswith("from manim")
+    from paper2manim.artifacts import run_dir
+    code = run_dir("test-run-text") / "attempts" / "00_TestScene.py"
+    assert code.read_text().startswith("from manim")
     # render skipped, no fatal_error
     assert not out.get("fatal_error")
 
 
-def test_mvp1_graph_render_success(stub_llm, monkeypatch):
+def test_text_graph_render_success(stub_llm, monkeypatch):
     """Patch render() to return a fake success result without invoking real manim."""
-    from paper2manim.graphs.mvp1 import build_mvp1_graph
+    from paper2manim.graphs.generation import build_generation_graph
 
     fake_mp4 = "/tmp/fake.mp4"
 
@@ -73,10 +75,10 @@ def test_mvp1_graph_render_success(stub_llm, monkeypatch):
             "workdir": kw.get("workdir", "/tmp"),
         }
 
-    monkeypatch.setattr("paper2manim.graphs.mvp1.render", fake_render)
-    g = build_mvp1_graph()
+    monkeypatch.setattr("paper2manim.graphs.scene_graph.render", fake_render)
+    g = build_generation_graph()
     state = {
-        "run_id": "test-run-mvp1-ok",
+        "run_id": "test-run-text-ok",
         "input_kind": "text",
         "raw_text": "hello",
         "attempts": [],

@@ -1,8 +1,7 @@
 """LangGraph State schema — single source of truth for all nodes.
 
-合一设计：MVP 1.0 仅用部分字段；MVP 2.0 全用。`total=False` 让所有字段可选，
-`Annotated[..., operator.add]` 标记需要累积的字段（reflection 历史）。
-State 必须可 JSON 序列化（LangGraph checkpoint / LangSmith trace 才能正常工作）。
+Paper-level outputs use reducers to merge independent scene branches.
+Scene-local mutable values live in SceneState.
 """
 
 from __future__ import annotations
@@ -17,6 +16,9 @@ class Scene(TypedDict):
     name: str
     description: str
     duration_hint: float
+    paper_claim: str
+    paper_evidence: str
+    final_takeaway: str
 
 
 class Storyboard(TypedDict):
@@ -50,6 +52,7 @@ class Attempt(TypedDict, total=False):
     render_result: RenderResult
     reviewer_decision: Literal["retry", "done", "give_up"] | None
     reviewer_hint: str | None
+    v_rev: int
 
 
 # ---- Top-level State ----
@@ -59,12 +62,12 @@ class PaperState(TypedDict, total=False):
     # ---- Inputs ----
     run_id: str
     input_kind: Literal["text", "pdf", "arxiv"]
-    raw_text: str | None  # MVP 1.0
-    pdf_path: str | None  # MVP 2.0 local PDF
-    arxiv_spec: str | None  # MVP 2.0 arxiv id / url / "arXiv:1706.03762"
+    raw_text: str | None  # Local section text
+    pdf_path: str | None  # Local PDF
+    arxiv_spec: str | None  # arXiv id / url / "arXiv:1706.03762"
     arxiv_section: str | None  # optional: slice a single \section{...} from source
 
-    # ---- MVP 2.0 parsing/summarization ----
+    # ---- Generation pipeline parsing/summarization ----
     # `parsed_markdown` holds the parser's flattened text regardless of source format.
     # Use `parsed_format` to disambiguate: "markdown" (Marker) vs "latex" (arXiv source).
     parsed_markdown: str | None
@@ -74,17 +77,6 @@ class PaperState(TypedDict, total=False):
 
     # ---- Storyboard ----
     storyboard: Storyboard | None
-
-    # ---- Per-scene mutables (LEGACY: mvp1 only) ----
-    # mvp2's per-scene loop now runs in a sub-graph with its own state shape
-    # (``paper2manim.graphs.scene_graph.SceneState``). These fields remain on
-    # PaperState so the simpler mvp1 graph (no fan-out) keeps working without
-    # a state-shape refactor. mvp2 nodes never read or write them; LangGraph
-    # would otherwise reject the parallel updates from each Send branch.
-    current_scene_idx: int
-    current_code: str | None
-    iter_count: int
-    error_feedback: dict | None
 
     # ---- Reflection caps ----
     attempts: Annotated[list[Attempt], operator.add]  # reducer: append across scenes
@@ -97,8 +89,7 @@ class PaperState(TypedDict, total=False):
 
     # ---- VLM caps + reducer outputs ----
     vlm_enabled: bool
-    # Per-scene cap; enforced inside the scene subgraph (mvp2 parallel path)
-    # or inline by the legacy mvp1 nodes.
+    # Per-scene cap, enforced inside the scene subgraph.
     max_visual_revisions: int
     # Each entry is ``{"scene": scene_name, "decision": "pass|revise|fail"}``.
     # The reducer keeps appending across the whole run; slicing by ``scene``
@@ -112,14 +103,14 @@ class PaperState(TypedDict, total=False):
     #     (the VLM did review and explicitly judged the scene unusable)
     # Reducer prevents earlier skips from being overwritten by later branches.
     vlm_skipped_scenes: Annotated[list[str], operator.add]
-    # One structured summary per scene (mvp2 parallel path only) — flushed
+    # One structured summary per scene (generate parallel path only) — flushed
     # back from each Send branch by ``scene_graph`` and reduced via
     # ``operator.add``. Includes the final ``last_visual_review`` dict so
     # post-run inspectors don't lose per-scene VLM detail (previously
     # available as a top-level field, now scoped to SceneState).
     scene_reports: Annotated[list[dict], operator.add]
 
-    # ---- Episodic Memory Bank (MVP 3.0 §4.1 + §4.4) ----
+    # ---- Episodic Memory Bank (ManimAgent) ----
     # Enabled by `--emb`. `emb_store_path` points at the directory holding
     # `memory.db` + `{success,failure}.index`. The retrieve / consolidate
     # nodes look this up on each invocation and cache the loaded EMB by path.
@@ -127,28 +118,24 @@ class PaperState(TypedDict, total=False):
     # directly and skip the path-based cache.
     emb_enabled: bool
     emb_store_path: str | None
-    # Both thresholds live on the proposal §4.2 0-100 schema. CLI defaults are
-    # 85.0 / 5.0 (see paper2manim.cli mvp2). DO NOT default these to old 1-5
+    # Both thresholds live on the three-axis scoring 0-100 schema. CLI defaults are
+    # 85.0 / 5.0 (see paper2manim.cli generate). DO NOT default these to old 1-5
     # values when synthesizing test states — the production gate would never fire.
     emb_theta_high: float  # success-record acceptance threshold (0-100 avg score)
     emb_failure_min_margin: float  # min (after-before) gap for a failure record
-    emb_use_llm_distillers: bool  # if True, rationale_writer + lesson_distiller call the LLM
     emb_use_faiss: bool
     emb_use_real_embedder: bool
     emb_instance: object | None  # test injection; opaque so TypedDict typecheck stays cheap
     retrieved_success: list[dict]  # wire-format records (no embedding payload)
     retrieved_failure: list[dict]
     emb_writes: Annotated[list[dict], operator.add]  # consolidation reports, one per run/scene
-    # B6: cross-domain freeze + channel ablations.
-    # ``emb_readonly`` (--emb-readonly): emb_consolidate_node returns immediately,
-    # so the EMB grows in train phase only. Required by RQ3 cross-domain test.
-    # ``dataset_domain`` (--dataset-domain cs|math|...): tags every record this
-    # run writes, so retrieval can later filter by ``Context.domain``.
-    # ``emb_no_success_channel`` / ``emb_no_failure_channel``: §8.3 Ablation E
-    # — disable one polarity for both retrieval (scene_graph.emb_retrieve_node)
-    # and consolidation (mvp2.emb_consolidate_node).
+    # Read-only memory and optional channel switches.
     emb_readonly: bool
-    dataset_domain: str | None
+    domain: str | None
+    task_text: str
+    scene_role: str
+    emb_k_success: int
+    emb_k_failure: int
     emb_no_success_channel: bool
     emb_no_failure_channel: bool
 

@@ -1,4 +1,4 @@
-"""Phase 1 tests: EMB schema, store, index, embedder, facade."""
+"""EMB storage tests: EMB schema, store, index, embedder, facade."""
 
 from __future__ import annotations
 

@@ -18,7 +18,7 @@ Five subcommands:
 
 The group is registered into the top-level ``paper2manim`` CLI in
 ``paper2manim/cli.py`` via ``cli.add_command(emb_group)`` so it shows up
-under ``paper2manim --help`` next to ``mvp1`` / ``mvp2`` / ``info``.
+under ``paper2manim --help`` next to ``generate`` / ``info``.
 """
 
 from __future__ import annotations
@@ -50,7 +50,7 @@ console = Console()
 
 
 def _default_store_path() -> Path:
-    """Same convention as ``paper2manim mvp2 --emb-store-path`` default."""
+    """Same convention as ``paper2manim generate --emb-store-path`` default."""
     return Path(settings.PAPER2MANIM_RUNS_DIR) / "_emb"
 
 
@@ -74,7 +74,14 @@ def _open_emb(store_path: str | None) -> EpisodicMemoryBank:
             f"EMB store not found at {p}. Run something with --emb first, "
             f"or pass --store-path explicitly."
         )
-    return build_default_emb(str(p))
+    spec_path = p / "embedder.json"
+    spec = json.loads(spec_path.read_text(encoding="utf-8")) if spec_path.exists() else {}
+    return build_default_emb(
+        str(p),
+        use_faiss=False,
+        embedder_model=spec.get("model"),
+        use_real_embedder=spec.get("kind", "sentence-transformers") == "sentence-transformers",
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -271,8 +278,7 @@ def stats_cmd(store_path: str | None, as_json: bool) -> None:
         if age:
             table.add_row(
                 f"{polarity} last_used age (days)",
-                f"min={age['min']} mean={age['mean']} max={age['max']} "
-                f"n={age['n_with_last_used']}",
+                f"min={age['min']} mean={age['mean']} max={age['max']} n={age['n_with_last_used']}",
             )
     console.print(table)
 
@@ -291,9 +297,7 @@ def stats_cmd(store_path: str | None, as_json: bool) -> None:
     help="Substring filter on context.source_paper (case-insensitive).",
 )
 @click.option("--limit", default=20, type=int, show_default=True)
-def list_cmd(
-    store_path: str | None, polarity: str, source_paper: str | None, limit: int
-) -> None:
+def list_cmd(store_path: str | None, polarity: str, source_paper: str | None, limit: int) -> None:
     """Paginated record listing."""
     emb = _open_emb(store_path)
     pol = None if polarity == "all" else polarity
@@ -389,7 +393,7 @@ def prune_cmd(
     polarity: str,
     apply_changes: bool,
 ) -> None:
-    """List or delete cold records (proposal §9 risk #2 mitigation)."""
+    """List or delete cold records (manual memory maintenance mitigation)."""
     emb = _open_emb(store_path)
     pol = None if polarity == "all" else polarity
     cold = select_cold_records(
@@ -406,15 +410,14 @@ def prune_cmd(
     table.add_column("source", overflow="fold")
     for r in cold:
         table.add_row(
-            r.id[:8], r.polarity, str(r.provenance.hit_count),
+            r.id[:8],
+            r.polarity,
+            str(r.provenance.hit_count),
             f"{r.context.source_paper}",
         )
     console.print(table)
     if not apply_changes:
-        click.echo(
-            f"[dry-run] would delete {len(cold)} record(s). "
-            f"Pass --apply to commit."
-        )
+        click.echo(f"[dry-run] would delete {len(cold)} record(s). Pass --apply to commit.")
         return
     deleted = 0
     for r in cold:
@@ -446,6 +449,7 @@ def retest_cmd(store_path: str | None, sample: int, score_margin: float) -> None
         click.echo("no success records to retest")
         return
     import random
+
     rng = random.Random(0)
     sampled = rng.sample(successes, k=min(sample, len(successes)))
     decayed: list[tuple[str, float, float]] = []
@@ -467,7 +471,8 @@ def retest_cmd(store_path: str | None, sample: int, score_margin: float) -> None
         v_rev = r.provenance.final_v_rev
         montage = (
             Path(settings.PAPER2MANIM_RUNS_DIR)
-            / r.provenance.run_id / "vlm_frames"
+            / r.provenance.run_id
+            / "vlm_frames"
             / f"{r.provenance.scene_id}_v{v_rev}.png"
         )
         if not montage.exists():
@@ -494,8 +499,7 @@ def retest_cmd(store_path: str | None, sample: int, score_margin: float) -> None
         table.add_row(rid, f"{old:.1f}", f"{new:.1f}", f"{new - old:+.1f}")
     console.print(table)
     click.echo(
-        f"decayed candidates: {len(decayed)}/{len(sampled)} "
-        f"unverifiable: {len(unverifiable)}"
+        f"decayed candidates: {len(decayed)}/{len(sampled)} unverifiable: {len(unverifiable)}"
     )
 
 

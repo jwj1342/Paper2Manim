@@ -1,11 +1,9 @@
-"""paper2manim CLI: `paper2manim mvp1` and `paper2manim mvp2`."""
+"""ManimAgent generation and episodic-memory CLI."""
 
 from __future__ import annotations
 
 import json
 import logging
-import os
-import sys
 from pathlib import Path
 
 import click
@@ -14,7 +12,6 @@ from rich.table import Table
 
 from paper2manim.artifacts import new_run_id, run_dir, save_input
 from paper2manim.config.env import settings
-from paper2manim.datasets import DOMAINS as _DATASET_DOMAINS
 from paper2manim.logging_setup import setup_logging
 from paper2manim.parsers.text import load_text
 from paper2manim.state import PaperState
@@ -23,13 +20,7 @@ console = Console()
 log = logging.getLogger(__name__)
 
 
-def _on_compute_node() -> bool:
-    return bool(os.environ.get("SLURM_JOB_ID"))
-
-
-def _preflight_voiceover(
-    voiceover_enabled: bool, no_render: bool
-) -> None:
+def _preflight_voiceover(voiceover_enabled: bool, no_render: bool) -> None:
     """Validate voiceover prerequisites before starting the graph.
 
     Fails fast with ``click.UsageError`` so the user doesn't wait through a
@@ -59,24 +50,7 @@ def _preflight_voiceover(
     try:
         build_tts_client(cfg)
     except RuntimeError as exc:
-        raise click.UsageError(
-            f"TTS configuration error: {exc}"
-        ) from exc
-
-
-def _block_login_node_render(allow: bool) -> None:
-    """Refuse to render on a login node unless --allow-render-on-login is passed.
-
-    Per global CLAUDE.md HPC rules: login nodes are not allowed to do heavy compute.
-    """
-    if _on_compute_node() or allow:
-        return
-    console.print(
-        "[bold red]Refusing to render on a login node.[/bold red] "
-        "Either run `salloc --account=aip-zhouyang --time=02:00:00 --cpus-per-task=4 --mem=16G` "
-        "first, or pass `--no-render` to generate code only, or `--allow-render-on-login` to override."
-    )
-    sys.exit(2)
+        raise click.UsageError(f"TTS configuration error: {exc}") from exc
 
 
 def _print_summary(state: PaperState) -> None:
@@ -87,6 +61,10 @@ def _print_summary(state: PaperState) -> None:
     table.add_row("title", sb.get("title", "-"))
     table.add_row("scenes", str(len(sb.get("scenes", []))))
     table.add_row("attempts", str(len(state.get("attempts", []))))
+    table.add_row(
+        "reflection_rounds",
+        str(sum(report.get("reflection_rounds", 0) for report in state.get("scene_reports", []))),
+    )
     table.add_row("rendered_videos", str(len(state.get("rendered_videos", []))))
     skipped = state.get("skipped_scenes") or []
     table.add_row("skipped_scenes", ", ".join(skipped) if skipped else "-")
@@ -103,101 +81,20 @@ def cli(verbose: bool) -> None:
 
 
 # Register subcommand groups. Imported here (not at top of file) so the
-# heavy emb stack doesn't load on every ``paper2manim mvp1`` invocation.
+# heavy EMB stack does not load until a command needs it.
 from paper2manim.cli_emb import emb_group as _emb_group  # noqa: E402
 
 cli.add_command(_emb_group)
 
 
 @cli.command()
+@click.option("--input", "input_arg", default=None, help="Section text or path to a .txt file.")
 @click.option(
-    "--input",
-    "input_arg",
-    required=True,
-    help="Plain text or path to a .txt file.",
-)
-@click.option("--quality", default=None, type=click.Choice(["l", "m", "h"]))
-@click.option("--no-render", is_flag=True, help="Generate code only; skip manim render.")
-@click.option(
-    "--allow-render-on-login",
-    is_flag=True,
-    help="Override the login-node guard (NOT recommended on Vulcan).",
-)
-@click.option(
-    "--voiceover/--no-voiceover",
-    "voiceover_enabled",
-    default=False,
-    help="Enable voiceover narration + TTS synthesis.",
-)
-@click.option(
-    "--tts-voice",
-    default=None,
-    help="Override TTS voice (defaults to config.yaml tts.voice).",
-)
-@click.option(
-    "--tts-speed",
-    default=None,
-    type=float,
-    help="TTS speed multiplier (defaults to config.yaml tts.speed).",
-)
-@click.option(
-    "--voiceover-language",
-    default="en",
+    "--scene-role",
+    default="BACKGROUND",
+    type=click.Choice(["BACKGROUND", "METHOD", "EXPERIMENT", "CONCLUSION"], case_sensitive=False),
     show_default=True,
-    help="Language for narration text.",
 )
-@click.option(
-    "--voiceover-strict/--voiceover-best-effort",
-    "voiceover_strict",
-    default=True,
-    help="Strict mode: TTS/alignment failures are fatal. Best-effort: degrade gracefully.",
-)
-def mvp1(
-    input_arg: str,
-    quality: str | None,
-    no_render: bool,
-    allow_render_on_login: bool,
-    voiceover_enabled: bool,
-    tts_voice: str | None,
-    tts_speed: float | None,
-    voiceover_language: str,
-    voiceover_strict: bool,
-) -> None:
-    """MVP 1.0: short text -> single-scene Manim video."""
-    _preflight_voiceover(voiceover_enabled, no_render)
-    if not no_render:
-        _block_login_node_render(allow_render_on_login)
-    from paper2manim.graphs.mvp1 import build_mvp1_graph
-
-    text = load_text(input_arg)
-    run_id = new_run_id()
-    save_input(run_id, raw_text=text)
-    state: PaperState = {
-        "run_id": run_id,
-        "input_kind": "text",
-        "raw_text": text,
-        "attempts": [],
-        "rendered_videos": [],
-        "max_retries": settings.PAPER2MANIM_MAX_RETRIES,
-        "iter_count": 0,
-        "current_scene_idx": 0,
-        "quality": quality or settings.PAPER2MANIM_QUALITY,  # type: ignore[typeddict-item]
-        "skip_render": no_render,
-        "voiceover_enabled": voiceover_enabled,
-        "voiceover_strict": voiceover_strict,
-        "voiceover_language": voiceover_language,
-    }
-    console.print(f"[cyan]MVP 1.0 run {run_id}[/cyan]: {text[:80]}...")
-    # Stable plain-text marker so external drivers (run_experiment.py,
-    # run_bootstrap.py) can grep the run_id back without parsing rich output.
-    click.echo(f"RUN_ID={run_id}")
-    g = build_mvp1_graph()
-    final = g.invoke(state)
-    _print_summary(final)
-    console.print(f"[green]Run dir:[/green] {run_dir(run_id)}")
-
-
-@cli.command()
 @click.option(
     "--pdf",
     "pdf_path",
@@ -217,30 +114,29 @@ def mvp1(
     "arxiv_section",
     default=None,
     help="Optional substring of a \\section{...} title to slice from the arXiv source "
-    "(e.g. 'Method'). Ignored for --pdf.",
+    "(e.g. 'Method'). Requires --arxiv.",
 )
 @click.option("--quality", default=None, type=click.Choice(["l", "m", "h"]))
-@click.option("--max-retries", default=None, type=int)
+@click.option("--max-retries", default=None, type=click.IntRange(min=0))
 @click.option("--no-render", is_flag=True)
-@click.option("--allow-render-on-login", is_flag=True)
 @click.option(
     "--vlm/--no-vlm",
     "vlm_enabled",
-    default=False,
+    default=True,
     help="Enable VLM multi-dim scoring loop on rendered scenes (requires config.yaml with vision_checker).",
 )
 @click.option(
     "--max-visual-revisions",
     default=2,
-    type=int,
+    type=click.IntRange(min=0),
     show_default=True,
-    help="Per-scene cap on visual revision passes when --vlm is on.",
+    help="Per-scene visual-revision budget (paper: 2).",
 )
 @click.option(
     "--emb/--no-emb",
     "emb_enabled",
-    default=False,
-    help="Enable Episodic Memory Bank: retrieve past success/failure records before coding and consolidate at end of run (proposal §4.1 + §4.4).",
+    default=True,
+    help="Enable Episodic Memory Bank: retrieve past success/failure records before coding and consolidate at end of run.",
 )
 @click.option(
     "--emb-store-path",
@@ -253,64 +149,42 @@ def mvp1(
     default=85.0,
     type=float,
     show_default=True,
-    help="Success-record acceptance threshold on the 0-100 avg VLM score "
-    "(proposal §4.2 3-dim canonical schema). Sits just below the §4.3 "
-    "auto-pass threshold (90), so bypass-passes still land in EMB.success. "
-    "Lower to ~70 during bootstrap when VLM signal is noisy.",
+    help="Minimum average VLM score for storing a positive memory record.",
 )
 @click.option(
     "--emb-failure-min-margin",
     default=5.0,
     type=float,
     show_default=True,
-    help="Minimum (after_score - before_score) on the 0-100 scale for a VLM "
-    "transition to qualify as a validated failure record. Larger = fewer but "
-    "cleaner records. Set ~0.5 to keep every strict improvement.",
-)
-@click.option(
-    "--emb-llm-distill/--no-emb-llm-distill",
-    "emb_use_llm_distillers",
-    default=False,
-    help="Use LLM-backed rationale_writer + lesson_distiller during consolidation (uses extra API calls). Off by default.",
+    help="Minimum VLM score improvement for storing a visual repair lesson.",
 )
 @click.option(
     "--emb-fake-embedder",
     "emb_use_real_embedder",
     flag_value=False,
     default=True,
-    help="Use the dependency-free HashEmbedder instead of sentence-transformers. Useful for CI / offline bootstrap.",
+    help="Use the dependency-free HashEmbedder instead of sentence-transformers. For offline development checks.",
 )
 @click.option(
     "--emb-readonly/--no-emb-readonly",
     "emb_readonly",
     default=False,
-    help="Read-only EMB: skip end-of-run consolidation. Required by RQ3 "
-    "cross-domain test phase so the frozen Domain-A EMB doesn't absorb "
-    "Domain-B records mid-experiment.",
+    help="Read existing memories without adding records or updating hit counters.",
 )
-@click.option(
-    "--dataset-domain",
-    "dataset_domain",
-    type=click.Choice(list(_DATASET_DOMAINS)),
-    default=None,
-    help="Split-level domain tag stamped on every record this run writes. "
-    "Drives retrieval's optional domain_filter for RQ3. Validated against "
-    "paper2manim.datasets.DOMAINS so a typo fails fast instead of silently "
-    "writing a misspelled tag the validator would later reject.",
-)
+@click.option("--domain", default=None, help="Optional domain label stored with memories.")
 @click.option(
     "--emb-no-success-channel",
     "emb_no_success_channel",
     is_flag=True,
     default=False,
-    help="§8.3 Ablation E — disable EMB.success on both retrieve and write.",
+    help="Disable EMB.success on both retrieve and write.",
 )
 @click.option(
     "--emb-no-failure-channel",
     "emb_no_failure_channel",
     is_flag=True,
     default=False,
-    help="§8.3 Ablation E — disable EMB.failure on both retrieve and write.",
+    help="Disable EMB.failure on both retrieve and write.",
 )
 @click.option(
     "--voiceover/--no-voiceover",
@@ -344,9 +218,9 @@ def mvp1(
 @click.option(
     "--scene-parallelism",
     default=1,
-    type=int,
+    type=click.IntRange(min=1),
     show_default=True,
-    help="Max concurrent scenes per paper (LangGraph Send fan-out). 1 = serial behavior identical to pre-refactor.",
+    help="Max concurrent scenes per paper (LangGraph Send fan-out). 1 = serial execution.",
 )
 @click.option(
     "--render-concurrency",
@@ -360,24 +234,24 @@ def mvp1(
     type=float,
     help="Global LLM calls-per-second cap (token bucket, shared across all agents). Defaults to unlimited.",
 )
-def mvp2(
+def generate(
+    input_arg: str | None,
+    scene_role: str,
     pdf_path: str | None,
     arxiv_spec: str | None,
     arxiv_section: str | None,
     quality: str | None,
     max_retries: int | None,
     no_render: bool,
-    allow_render_on_login: bool,
     vlm_enabled: bool,
     max_visual_revisions: int,
     emb_enabled: bool,
     emb_store_path: str | None,
     emb_theta_high: float,
     emb_failure_min_margin: float,
-    emb_use_llm_distillers: bool,
     emb_use_real_embedder: bool,
     emb_readonly: bool,
-    dataset_domain: str | None,
+    domain: str | None,
     emb_no_success_channel: bool,
     emb_no_failure_channel: bool,
     voiceover_enabled: bool,
@@ -389,17 +263,19 @@ def mvp2(
     render_concurrency: int | None,
     llm_rps: float | None,
 ) -> None:
-    """MVP 2.0: paper -> multi-scene video with reflection loop.
+    """Generate a paper-section animation with visual reflection and dual-channel memory.
 
-    Input: exactly one of --pdf <path> or --arxiv <id|url>.
+    Input: exactly one of --input, --pdf, or --arxiv.
     """
     _preflight_voiceover(voiceover_enabled, no_render)
-    if bool(pdf_path) == bool(arxiv_spec):
-        raise click.UsageError("Provide exactly one of --pdf or --arxiv.")
-    if not no_render:
-        _block_login_node_render(allow_render_on_login)
+    if sum(x is not None for x in (input_arg, pdf_path, arxiv_spec)) != 1:
+        raise click.UsageError("Provide exactly one of --input, --pdf, or --arxiv.")
+    if arxiv_section and not arxiv_spec:
+        raise click.UsageError("--section requires --arxiv; use --input for local section text.")
+    if no_render and emb_enabled:
+        emb_readonly = True
     from paper2manim import concurrency
-    from paper2manim.graphs.mvp2 import build_mvp2_graph
+    from paper2manim.graphs.generation import build_generation_graph
 
     # Configure process-global throttles BEFORE building the graph so that the
     # first get_llm() / render() call inside any scene branch sees them.
@@ -419,7 +295,7 @@ def mvp2(
         "rendered_videos": [],
         "skipped_scenes": [],
         "scene_reports": [],
-        "max_retries": max_retries or settings.PAPER2MANIM_MAX_RETRIES,
+        "max_retries": settings.PAPER2MANIM_MAX_RETRIES if max_retries is None else max_retries,
         "quality": quality or settings.PAPER2MANIM_QUALITY,  # type: ignore[typeddict-item]
         "skip_render": no_render,
         "vlm_enabled": vlm_enabled,
@@ -429,15 +305,14 @@ def mvp2(
         "emb_store_path": resolved_emb_path if emb_enabled else None,
         "emb_theta_high": emb_theta_high,
         "emb_failure_min_margin": emb_failure_min_margin,
-        "emb_use_llm_distillers": emb_use_llm_distillers,
         "emb_use_faiss": True,
         "emb_use_real_embedder": emb_use_real_embedder,
         "retrieved_success": [],
         "retrieved_failure": [],
         "emb_writes": [],
-        # B6 cross-domain freeze + channel ablations
         "emb_readonly": emb_readonly,
-        "dataset_domain": dataset_domain,
+        "domain": domain,
+        "scene_role": scene_role.upper(),
         "emb_no_success_channel": emb_no_success_channel,
         "emb_no_failure_channel": emb_no_failure_channel,
         # Voiceover / TTS
@@ -449,12 +324,22 @@ def mvp2(
         "vo_tts_speed_override": tts_speed,
     }
     if emb_enabled:
-        console.print(f"[cyan]EMB enabled[/cyan] — store={resolved_emb_path}, theta_high={emb_theta_high}")
-    if pdf_path:
+        console.print(
+            f"[cyan]EMB enabled[/cyan] — store={resolved_emb_path}, theta_high={emb_theta_high}"
+        )
+    if input_arg is not None:
+        text = load_text(input_arg)
+        if not text.strip():
+            raise click.UsageError("--input must contain nonempty text.")
+        save_input(run_id, raw_text=text)
+        state["input_kind"] = "text"
+        state["raw_text"] = text
+        console.print(f"[cyan]ManimAgent run {run_id}[/cyan] (text): {text[:80]}")
+    elif pdf_path:
         save_input(run_id, pdf_path=pdf_path)
         state["input_kind"] = "pdf"
         state["pdf_path"] = str(Path(pdf_path).resolve())
-        console.print(f"[cyan]MVP 2.0 run {run_id}[/cyan] (pdf): {pdf_path}")
+        console.print(f"[cyan]ManimAgent run {run_id}[/cyan] (pdf): {pdf_path}")
     else:
         (run_dir(run_id) / "input.arxiv.txt").write_text(
             f"{arxiv_spec}\nsection={arxiv_section or ''}\n", encoding="utf-8"
@@ -463,9 +348,8 @@ def mvp2(
         state["arxiv_spec"] = arxiv_spec
         state["arxiv_section"] = arxiv_section
         tag = f" §{arxiv_section}" if arxiv_section else ""
-        console.print(f"[cyan]MVP 2.0 run {run_id}[/cyan] (arxiv): {arxiv_spec}{tag}")
-    # Stable plain-text marker so external drivers (run_experiment.py,
-    # run_bootstrap.py) can grep the run_id back without parsing rich output.
+        console.print(f"[cyan]ManimAgent run {run_id}[/cyan] (arxiv): {arxiv_spec}{tag}")
+    # Stable marker for batch callers.
     click.echo(f"RUN_ID={run_id}")
     # The parent graph is shallow (parser → summarizer → storyboarder →
     # run_scene fan-out → concat → emb_consolidate); recursion limit just
@@ -473,26 +357,29 @@ def mvp2(
     # recursion budget is set inside ``run_scene_node`` against the compiled
     # scene subgraph, not against this limit.
     recursion_limit = 50
-    g = build_mvp2_graph()
-    final = g.invoke(state, config={"recursion_limit": recursion_limit})
+    g = build_generation_graph()
+    final = g.invoke(
+        state, config={"recursion_limit": recursion_limit, "max_concurrency": scene_parallelism}
+    )
     _print_summary(final)
     console.print(f"[green]Run dir:[/green] {run_dir(run_id)}")
+    if final.get("fatal_error"):
+        raise click.ClickException(final["fatal_error"])
 
 
 @cli.command()
 def info() -> None:
     """Print configuration and environment status."""
+    from paper2manim.llm import CANONICAL_ROLES, current_model, current_provider
+
     console.print(
         json.dumps(
             {
-                "MIMO_BASE_URL": settings.MIMO_BASE_URL,
-                "MIMO_API_KEY_set": bool(settings.MIMO_API_KEY),
+                "provider": current_provider(),
+                "models": {role: current_model(role) for role in CANONICAL_ROLES},
                 "PAPER2MANIM_RUNS_DIR": str(settings.PAPER2MANIM_RUNS_DIR),
-                "PAPER2MANIM_DEFAULT_MODEL": settings.PAPER2MANIM_DEFAULT_MODEL,
                 "PAPER2MANIM_MAX_RETRIES": settings.PAPER2MANIM_MAX_RETRIES,
                 "PAPER2MANIM_QUALITY": settings.PAPER2MANIM_QUALITY,
-                "on_compute_node": _on_compute_node(),
-                "SLURM_JOB_ID": os.environ.get("SLURM_JOB_ID"),
             },
             indent=2,
         )

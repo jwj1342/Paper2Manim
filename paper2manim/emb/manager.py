@@ -108,7 +108,9 @@ class EpisodicMemoryBank:
         if ctx.task_embedding and len(ctx.task_embedding) == self._embedder.dim:
             return ctx
         try:
-            vec = self._embedder.encode_one(ctx.task_text)
+            vec = self._embedder.encode_one(
+                ctx.task_text + "\nScene role: " + ctx.scene_role.upper()
+            )
         except EmbedderError:
             raise
         except Exception as exc:  # noqa: BLE001 — wrap upstream into our taxonomy
@@ -118,7 +120,7 @@ class EpisodicMemoryBank:
     def _warn_on_score_schema_drift(self) -> None:
         """Spot-check stored success records for the legacy 1-5 score scale.
 
-        The proposal §4.2 schema is 0-100. Records with ``vlm_score`` strictly
+        The three-axis scoring schema is 0-100. Records with ``vlm_score`` strictly
         between 0 and 5 strongly suggest data written under the old schema (or
         bypassed the gate via ``theta_high<=0``). We don't migrate — we just
         log a single warning so retrieval / consolidate behavior on a mixed
@@ -129,9 +131,7 @@ class EpisodicMemoryBank:
         except Exception:  # noqa: BLE001
             return
         legacy = sum(
-            1
-            for r in recs
-            if r.provenance.vlm_score is not None and 0 < r.provenance.vlm_score < 5
+            1 for r in recs if r.provenance.vlm_score is not None and 0 < r.provenance.vlm_score < 5
         )
         if legacy:
             log.warning(
@@ -185,7 +185,10 @@ class EpisodicMemoryBank:
         ``record.context.task_embedding`` to skip the embedder call (useful
         when batch-encoding for bootstrap runs).
         """
-        if record.context.task_embedding and len(record.context.task_embedding) != self._embedder.dim:
+        if (
+            record.context.task_embedding
+            and len(record.context.task_embedding) != self._embedder.dim
+        ):
             raise EMBError(
                 f"context.task_embedding dim {len(record.context.task_embedding)} != "
                 f"embedder.dim {self._embedder.dim}"
@@ -248,7 +251,7 @@ class EpisodicMemoryBank:
         """Return up to ``k`` highest-similarity records of the given polarity.
 
         ``bump_hit`` increments hit_count + last_used so the EMB can later
-        identify cold records for pruning (proposal §9 risk #2).
+        identify cold records for pruning (manual memory maintenance).
         """
         if k <= 0:
             return []
@@ -368,10 +371,9 @@ def _backfill_spec_from_records(store: MemoryStore) -> dict[str, Any] | None:
             return {"kind": "sentence-transformers", "model": _DEFAULT_ST_MODEL, "dim": dim}
         if dim == _DEFAULT_HASH_DIM:
             return {"kind": "hash", "dim": dim}
-        # Unknown dim: fall back to HashEmbedder of that dim so retrieval can
-        # still rehydrate without crashing. The operator may need to write an
-        # explicit embedder.json if they want sentence-transformers semantics.
-        return {"kind": "hash", "dim": dim}
+        raise EMBError(
+            f"Unidentified encoder with dimension {dim}; supply a verified embedder.json."
+        )
     return None
 
 
@@ -394,15 +396,10 @@ def build_default_emb(
 
     Toggling ``use_real_embedder=False`` swaps in :class:`HashEmbedder`, which
     avoids the ~80 MB sentence-transformers download. Useful for tests, CI
-    smoke runs, and offline bootstrap experiments where retrieval quality
-    isn't being measured yet.
+    and offline development checks.
 
-    The store *pins* its embedder identity on first creation: subsequent opens
-    use the pinned spec regardless of ``use_real_embedder`` / ``embedder_model``
-    so different consumers can't bleed an incompatible-dim embedder over an
-    existing store. If the spec disagrees with the caller's request, a
-    warning is logged and the pinned spec wins — pass a different
-    ``base_dir`` for a fresh embedder.
+    The store pins its encoder identity on first creation and rejects
+    conflicting encoder requests when reopened.
     """
     base = Path(base_dir)
     base.mkdir(parents=True, exist_ok=True)
@@ -429,15 +426,13 @@ def build_default_emb(
                 spec = {"kind": "hash", "dim": _DEFAULT_HASH_DIM}
             origin = "caller"
 
-    caller_wanted_real = use_real_embedder
-    pinned_real = spec["kind"] == "sentence-transformers"
-    if origin == "pinned" and caller_wanted_real != pinned_real:
-        log.warning(
-            "[emb] store at %s is pinned to %s (dim=%d); caller asked for %s, "
-            "but the pinned spec wins. Use a different --emb-store-path to get "
-            "a fresh embedder.",
-            base, spec["kind"], spec["dim"],
-            "sentence-transformers" if caller_wanted_real else "hash",
+    requested_kind = "sentence-transformers" if use_real_embedder else "hash"
+    if spec["kind"] != requested_kind or (
+        use_real_embedder and spec.get("model") != (embedder_model or _DEFAULT_ST_MODEL)
+    ):
+        raise EMBError(
+            f"EMB at {base} is pinned to {spec}; requested {requested_kind} "
+            f"({embedder_model or _DEFAULT_ST_MODEL}). Use a separate store to change encoders."
         )
 
     embedder: Embedder = _build_embedder_from_spec(spec)
@@ -446,13 +441,8 @@ def build_default_emb(
     # Build indices off the spec dim — never off ``embedder.dim`` — so opening
     # an ST-pinned store for read-only inspection doesn't force a torch import.
     if use_faiss:
-        try:
-            s_idx: VectorIndex = FaissVectorIndex(dim)
-            f_idx: VectorIndex = FaissVectorIndex(dim)
-        except VectorIndexError as exc:
-            log.warning("[emb] Faiss unavailable (%s); falling back to in-memory index", exc)
-            s_idx = InMemoryVectorIndex(dim)
-            f_idx = InMemoryVectorIndex(dim)
+        s_idx: VectorIndex = FaissVectorIndex(dim)
+        f_idx: VectorIndex = FaissVectorIndex(dim)
     else:
         s_idx = InMemoryVectorIndex(dim)
         f_idx = InMemoryVectorIndex(dim)

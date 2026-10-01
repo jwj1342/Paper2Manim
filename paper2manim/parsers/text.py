@@ -1,4 +1,4 @@
-"""MVP 1.0: trivial text parser — accept either a literal string or a path to a .txt file."""
+"""section-text input: trivial text parser — accept either a literal string or a path to a .txt file."""
 
 from __future__ import annotations
 

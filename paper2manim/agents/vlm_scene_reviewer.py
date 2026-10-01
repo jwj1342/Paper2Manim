@@ -8,7 +8,7 @@ normalized review dict the graph can route on. JSON is parsed defensively; on
 any parse failure we synthesize a conservative ``revise`` verdict so the loop
 can still proceed.
 
-The schema is the proposal §4.2 canonical form: three dimensions
+The schema is the three-axis scoring canonical form: three dimensions
 (``logic_flow``, ``layout_occlusion``, ``accuracy``) on a 0–100 scale, with a
 ``decision`` of ``pass | revise | fail``. Scenes whose average score is ≥ 90
 are auto-upgraded to ``pass`` even if the VLM said ``revise``, so the loop
@@ -38,8 +38,9 @@ _SCORE_KEYS = (
 
 # Average-score threshold above which a "revise" verdict is auto-upgraded to
 # "pass". Without this the model rarely self-passes and every scene burns the
-# full revision cap; see Issue #12 / docs/vlm_experiment.md baseline.
+# full revision cap.
 _AUTO_PASS_AVG = 90.0
+
 
 def _extract_first_json_object(raw: str) -> str | None:
     """Return the first top-level ``{...}`` substring with balanced braces.
@@ -115,25 +116,22 @@ def _coerce_scores(value: Any) -> dict[str, int | None]:
 
 
 def _average_score(scores: dict[str, int | None]) -> float | None:
-    """Return the mean of non-None scores, or ``None`` if everything is missing."""
-    present = [v for v in scores.values() if v is not None]
-    if not present:
+    """Return the mean of all three valid dimensions, or ``None``."""
+    if any(scores.get(k) is None for k in _SCORE_KEYS):
         return None
-    return sum(present) / len(present)
+    return sum(scores[k] for k in _SCORE_KEYS) / 3
 
 
 def _conservative_review(scene_id: str, raw: str, error: str) -> dict[str, Any]:
     """Used when the VLM response is unparseable — keeps the graph moving.
 
-    All three dimensions are deliberately filled with ``0`` (not ``None``) because
-    "model produced garbage" is itself the worst possible quality signal, and we
-    want this entry to *look* bad in the trend table rather than be excluded
-    from it.
+    Unavailable dimensions remain unset and cannot form a scored memory.
     """
     return {
         "scene_id": scene_id,
         "decision": "revise",
-        "scores": {k: 0 for k in _SCORE_KEYS},
+        "scores": {k: None for k in _SCORE_KEYS},
+        "average_score": None,
         "issues": [
             {
                 "type": "other",
@@ -175,12 +173,7 @@ def parse_vlm_response(raw: str, scene_id: str) -> dict[str, Any]:
     raw_decision = decision
     avg = _average_score(scores)
     all_dims_present = all(v is not None for v in scores.values())
-    if (
-        decision == "revise"
-        and all_dims_present
-        and avg is not None
-        and avg >= _AUTO_PASS_AVG
-    ):
+    if all_dims_present and avg is not None and avg >= _AUTO_PASS_AVG:
         decision = "pass"
     return {
         "scene_id": str(obj.get("scene_id") or scene_id),
@@ -213,7 +206,9 @@ def _build_scene_spec_payload(
     ``key_contributions[0]`` regardless of which scene it was.
     """
     paper_evidence: list[str] = []
-    if summary:
+    if scene.get("paper_evidence"):
+        paper_evidence = [str(scene["paper_evidence"])]
+    elif summary:
         paper_evidence = list(summary.get("main_concepts") or [])
 
     scene_claim = (scene.get("paper_claim") or "").strip()
@@ -227,13 +222,14 @@ def _build_scene_spec_payload(
     return {
         "scene_id": scene.get("name") or f"scene_{scene_idx}",
         "title": scene.get("name") or "",
-        "paper_role": "explanatory",
+        "paper_role": scene.get("paper_role", "BACKGROUND"),
         "paper_claim": scene_claim,
         "paper_evidence": paper_evidence,
         "visual_mapping": scene.get("description", ""),
         "main_visual_object": scene.get("description", "").split(".")[0][:120],
         "animation_beats": [scene.get("description", "")],
-        "final_takeaway": scene.get("description", "").split(".")[-1].strip()[:200],
+        "final_takeaway": scene.get("final_takeaway")
+        or scene.get("description", "").split(".")[-1].strip()[:200],
     }
 
 

@@ -1,7 +1,7 @@
 """Shared voiceover assembly layer.
 
 This module is the single entry point for voiceover assembly used by both
-MVP1 and MVP2 graphs. It owns the full TTS → align → concat → mux pipeline
+Demo and Generation graphs. It owns the full TTS → align → concat → mux pipeline
 so the graph nodes stay thin.
 """
 

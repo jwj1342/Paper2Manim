@@ -2,21 +2,18 @@
 
 from __future__ import annotations
 
-import os
 from unittest.mock import MagicMock
 
 import pytest
+import yaml
 
 
 @pytest.fixture(autouse=True)
 def _isolated_runs_dir(tmp_path, monkeypatch):
     """Force PAPER2MANIM_RUNS_DIR to a tmp dir for every test.
 
-    Also force the YAML LLM factory into env-mimo fallback by pointing its
-    config path at a guaranteed-absent file. Without this, a developer's local
-    ``config.yaml`` (used for real experiments) would silently bypass the
-    ``MIMO_API_KEY`` injection below and break every test that asserts on the
-    fallback path.
+    Use a temporary model configuration with test credentials and a local
+    endpoint, independent of a developer's config.yaml.
 
     NOTE on the rebind dance: ``paper2manim.config.env.settings`` is a
     module-level singleton built at first import, and ``paper2manim.artifacts``
@@ -32,7 +29,6 @@ def _isolated_runs_dir(tmp_path, monkeypatch):
     runs = tmp_path / "runs"
     runs.mkdir()
     monkeypatch.setenv("PAPER2MANIM_RUNS_DIR", str(runs))
-    monkeypatch.setenv("MIMO_API_KEY", os.environ.get("MIMO_API_KEY", "tp-test-key"))
 
     from paper2manim.config import env as env_mod
 
@@ -55,12 +51,28 @@ def _isolated_runs_dir(tmp_path, monkeypatch):
         if hasattr(mod, "settings"):
             monkeypatch.setattr(mod, "settings", fresh)
 
-    # Drop yaml-cache and steer the loader at a non-existent path so tests
-    # always exercise the env-mimo fallback regardless of whether the dev has
-    # a local config.yaml.
     from paper2manim import llm as llm_mod
 
-    monkeypatch.setattr(llm_mod, "_CONFIG_PATH", tmp_path / "config_absent.yaml")
+    model_config = tmp_path / "config.yaml"
+    model_config.write_text(
+        yaml.safe_dump(
+            {
+                "models": [
+                    {
+                        "name": "test",
+                        "provider": "openai_compatible",
+                        "model": "test-model",
+                        "api_key": "test-key",
+                        "base_url": "http://localhost:0/v1",
+                        "supports_vision": True,
+                    }
+                ],
+                "model_roles": {role: "test" for role in llm_mod.CANONICAL_ROLES},
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(llm_mod, "_CONFIG_PATH", model_config)
     llm_mod.reload_config()
 
     yield runs
@@ -89,7 +101,7 @@ def mock_llm(monkeypatch):
     """Patch paper2manim.llm.get_llm to return a controllable mock."""
     mock = MagicMock()
 
-    def fake_get_llm(model="flash", **kw):
+    def fake_get_llm(model="scene_coder", **kw):
         return mock
 
     monkeypatch.setattr("paper2manim.llm.get_llm", fake_get_llm)
