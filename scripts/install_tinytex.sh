@@ -1,6 +1,6 @@
 #!/bin/bash
 # 用户级 TinyTeX 安装 + Manim 推荐 LaTeX 包
-# 仅在集群无 texlive 模块时跑一次（Vulcan 当前情形）
+# 在系统尚未安装 LaTeX 时运行一次。
 
 set -euo pipefail
 

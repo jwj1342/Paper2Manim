@@ -3,8 +3,8 @@
 A :class:`MemoryRecord` is a polarity-tagged envelope around two pieces:
 
 * ``context``: shared retrieval head — task text + embedding + scene metadata.
-* ``body``: polarity-specific payload — ``SuccessBody`` for §4.4a entries,
-  ``FailureBody`` for §4.4b entries (a validated reflection Lesson).
+* ``body``: polarity-specific payload — ``SuccessBody`` for positive memory entries,
+  ``FailureBody`` for negative memory entries (a validated reflection Lesson).
 
 Both polarities share the same ``Provenance`` schema so trace / hit-count /
 freshness queries are uniform.
@@ -34,18 +34,14 @@ class Context(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    task_text: str = Field(..., description="Scene description / SceneSpec text")
+    task_text: str = Field(..., description="Source section text")
     task_embedding: list[float] = Field(default_factory=list, description="Dense vector")
     scene_role: str = Field(
         default="unknown",
         description="Coarse scene category: background / method / experiment / conclusion / unknown",
     )
     domain_tags: list[str] = Field(default_factory=list)
-    # Single split-level domain identifier (cs / math / physics / quantum / econ).
-    # Distinct from ``domain_tags`` (multi-value, fine-grained) — ``domain`` is the
-    # experiment-level partition used by RQ3 cross-domain freeze. Empty string =
-    # "unknown / not tagged"; pre-B6 records load with this default via the
-    # ALTER TABLE migration in ``store.py``.
+    # Optional domain label, separate from fine-grained domain_tags.
     domain: str = Field(default="", description="e.g. 'cs' | 'math' | 'physics' | 'quantum' | 'econ'")
     source_paper: str = Field(default="", description="e.g. 'arxiv:1706.03762'")
     source_section: str = Field(default="", description="e.g. 'Background'")
@@ -55,7 +51,7 @@ class Context(BaseModel):
 
 
 class SuccessBody(BaseModel):
-    """§4.4a positive consolidation — Rationale + full code + frame hash."""
+    """positive memory positive consolidation — Rationale + full code + frame hash."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -69,7 +65,7 @@ class SuccessBody(BaseModel):
 
 
 class FailureBody(BaseModel):
-    """§4.4b negative consolidation — a validated Lesson.
+    """negative memory negative consolidation — a validated Lesson.
 
     A ``FailureBody`` is only created from transitions where ``after_score >
     before_score`` (see :class:`Provenance`), so anti / good examples are

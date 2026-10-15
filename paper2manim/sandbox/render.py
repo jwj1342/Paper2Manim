@@ -6,6 +6,7 @@ import logging
 import os
 import resource
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 from typing import Any
@@ -50,7 +51,7 @@ def render(
     # If the LLM produced obviously dangerous or malformed Manim code, fail fast
     # without spinning up a subprocess.
     try:
-        validate_manim_code(code)
+        validate_manim_code(code, scene_name=scene_name)
     except (ValueError, SyntaxError) as exc:
         return {
             "status": "error",
@@ -72,11 +73,13 @@ def render(
     out_dir.mkdir(exist_ok=True)
 
     cmd = [
+        sys.executable,
+        "-m",
         "manim",
         "render",
         f"-q{quality}",
         "--disable_caching",
-        "--renderer=cairo",  # HPC headless; OpenGL would crash with no display
+        "--renderer=cairo",  # Supports rendering without a display.
         "--media_dir",
         str(out_dir),
         str(script),

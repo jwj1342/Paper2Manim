@@ -1,4 +1,4 @@
-"""arXiv source-tarball parser for MVP 2.0.
+"""arXiv source-tarball parser for Generation pipeline.
 
 Strategy: pull the author-uploaded LaTeX source from arxiv.org/e-print/<id>
 (usually a gzipped tarball; sometimes a single .tex or a single .pdf when the

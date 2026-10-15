@@ -3,8 +3,7 @@
 When the EMB is enabled, the graph populates ``state["retrieved_success"]`` and
 ``state["retrieved_failure"]`` ahead of this node; we inject them as
 *Reference Examples* (soft guidance) and *Known Pitfalls* (hard constraints)
-respectively. Both blocks are no-ops when the EMB is empty or disabled, so the
-Coder degrades cleanly to its pre-RAG behavior.
+respectively. Empty banks retain both prompt slots with an explicit empty marker.
 """
 
 from __future__ import annotations
@@ -12,7 +11,7 @@ from __future__ import annotations
 import json
 import logging
 import re
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from paper2manim.artifacts import append_trace, save_attempt_code
 from paper2manim.emb.retrieval import (
@@ -21,7 +20,9 @@ from paper2manim.emb.retrieval import (
 )
 from paper2manim.llm import get_llm
 from paper2manim.prompts import load_prompt
-from paper2manim.state import PaperState
+
+if TYPE_CHECKING:
+    from paper2manim.graphs.scene_graph import SceneState
 
 log = logging.getLogger(__name__)
 
@@ -37,7 +38,7 @@ def extract_python_block(text: str) -> str:
     return text.strip()
 
 
-def _build_user_prompt(state: PaperState) -> str:
+def _build_user_prompt(state: SceneState) -> str:
     sb = state.get("storyboard")
     if not sb:
         raise ValueError("coder: storyboard missing in state")
@@ -51,17 +52,10 @@ def _build_user_prompt(state: PaperState) -> str:
     blocks.append("\n## Project conventions\n")
     blocks.append(load_prompt("manim_skill_rules"))
 
-    # EMB-driven retrieval (Phase 3): if the graph stashed top-k records on
-    # state, render them as in-context guidance / constraints. Empty lists
-    # produce empty strings, so injecting unconditionally is safe.
-    ref_block = render_reference_examples_block(state.get("retrieved_success") or [])
-    pit_block = render_known_pitfalls_block(state.get("retrieved_failure") or [])
-    if ref_block:
-        blocks.append("\n")
-        blocks.append(ref_block)
-    if pit_block:
-        blocks.append("\n")
-        blocks.append(pit_block)
+    # Keep the same two slots for empty and populated banks.
+    if state.get("emb_enabled"):
+        blocks.append("\n" + render_reference_examples_block(state.get("retrieved_success") or []))
+        blocks.append("\n" + render_known_pitfalls_block(state.get("retrieved_failure") or []))
 
     if state.get("error_feedback"):
         ef = state["error_feedback"]
@@ -96,7 +90,7 @@ def _build_user_prompt(state: PaperState) -> str:
     return "".join(blocks)
 
 
-def coder_node(state: PaperState) -> dict[str, Any]:
+def coder_node(state: SceneState) -> dict[str, Any]:
     sb = state.get("storyboard")
     if not sb:
         return {"fatal_error": "coder: storyboard missing"}
@@ -107,7 +101,7 @@ def coder_node(state: PaperState) -> dict[str, Any]:
     scene = sb["scenes"][idx]
     user = _build_user_prompt(state)
     system = load_prompt("coder")
-    llm = get_llm("flash", temperature=0.1)
+    llm = get_llm("scene_coder", temperature=0.1)
     log.info(
         "[coder] scene=%s iter=%d prompt_chars=%d",
         scene["name"],
@@ -117,11 +111,23 @@ def coder_node(state: PaperState) -> dict[str, Any]:
     raw = llm.invoke([("system", system), ("user", user)]).content
     code = extract_python_block(raw if isinstance(raw, str) else str(raw))
 
+    v_rev = state.get("vlm_revision_count", 0)
+    artifact_scene = scene["name"] if v_rev == 0 else f"{scene['name']}_v{v_rev}"
     if state.get("run_id"):
-        save_attempt_code(state["run_id"], scene["name"], state.get("iter_count", 0), code)
+        save_attempt_code(state["run_id"], artifact_scene, state.get("iter_count", 0), code)
         append_trace(
             state["run_id"],
             "coder",
-            {"scene": scene["name"], "iter": state.get("iter_count", 0), "code_chars": len(code)},
+            {
+                "scene": scene["name"],
+                "iter": state.get("iter_count", 0),
+                "code_chars": len(code),
+                "is_retry": bool(state.get("error_feedback")),
+                "v_rev": v_rev,
+            },
         )
-    return {"current_code": code}
+    return {
+        "current_code": code,
+        "text_retry_count": state.get("text_retry_count", 0)
+        + int(bool(state.get("error_feedback"))),
+    }

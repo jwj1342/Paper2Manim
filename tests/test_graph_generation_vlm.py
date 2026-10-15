@@ -1,8 +1,8 @@
-"""VLM Multi-Dim Scoring loop tests on the MVP 2.0 graph.
+"""VLM Multi-Dim Scoring loop tests on the Generation pipeline graph.
 
 The graph is stubbed end-to-end:
 - parser / summarizer / storyboarder / coder / reviewer LLM calls return canned
-  responses (same approach as test_graph_mvp2.py).
+  responses (same approach as test_graph_generate.py).
 - ``sample_frames_montage`` is patched to produce an empty PNG without ffmpeg.
 - ``vlm_scene_reviewer.review_scene`` is patched to return a scripted decision
   on first call and ``pass`` on subsequent calls — proving the revise→re-render
@@ -78,7 +78,7 @@ def stub_pipeline(monkeypatch, tmp_path):
     from paper2manim.parsers import ParsedInput
 
     monkeypatch.setattr(
-        "paper2manim.graphs.mvp2.parse_local_pdf",
+        "paper2manim.graphs.generation.parse_local_pdf",
         lambda p: ParsedInput(text="# T", fmt="markdown", source="pdf:fake"),
     )
 
@@ -120,15 +120,15 @@ def stub_pipeline(monkeypatch, tmp_path):
             silent_video_path=str(out),
         )
 
-    monkeypatch.setattr("paper2manim.graphs.mvp2.assemble_voiceover", fake_assemble_voiceover)
+    monkeypatch.setattr("paper2manim.graphs.generation.assemble_voiceover", fake_assemble_voiceover)
 
     return {"llm": llm}
 
 
 def _run(initial_state):
-    from paper2manim.graphs.mvp2 import build_mvp2_graph
+    from paper2manim.graphs.generation import build_generation_graph
 
-    g = build_mvp2_graph()
+    g = build_generation_graph()
     return g.invoke(initial_state, config={"recursion_limit": 80})
 
 
@@ -379,7 +379,7 @@ def test_vlm_fail_decision_advances_without_revision(stub_pipeline, monkeypatch,
     assert out.get("skipped_scenes", []) == []
 
 
-def test_vlm_review_exception_treated_as_pass(stub_pipeline, monkeypatch, tmp_path):
+def test_vlm_review_exception_is_unscored(stub_pipeline, monkeypatch, tmp_path):
     """If review_scene raises, vlm_review_node should auto-pass to keep the graph moving."""
     revise_calls = {"n": 0}
 
@@ -412,7 +412,7 @@ def test_vlm_review_exception_treated_as_pass(stub_pipeline, monkeypatch, tmp_pa
         }
     )
     assert revise_calls["n"] == 0
-    assert out["scene_reports"][0]["last_visual_review"]["decision"] == "pass"
+    assert out["scene_reports"][0]["last_visual_review"]["decision"] == "fail"
     assert out["final_video_path"].endswith("output.mp4")
 
 
@@ -477,7 +477,7 @@ def test_vlm_mixed_verdicts_across_scenes(monkeypatch, tmp_path):
         monkeypatch.setattr(attr, lambda *a, **kw: llm)
 
     monkeypatch.setattr(
-        "paper2manim.graphs.mvp2.parse_local_pdf",
+        "paper2manim.graphs.generation.parse_local_pdf",
         lambda p: ParsedInput(text="# T", fmt="markdown", source="pdf:fake"),
     )
 
@@ -516,7 +516,7 @@ def test_vlm_mixed_verdicts_across_scenes(monkeypatch, tmp_path):
         )
 
     monkeypatch.setattr("paper2manim.graphs.scene_graph.sample_frames_montage", fake_sample)
-    monkeypatch.setattr("paper2manim.graphs.mvp2.assemble_voiceover", fake_assemble_voiceover)
+    monkeypatch.setattr("paper2manim.graphs.generation.assemble_voiceover", fake_assemble_voiceover)
 
     # SceneA pass on first review; SceneB revise then pass; SceneC hits cap.
     state_calls: dict[str, int] = {}
@@ -558,9 +558,9 @@ def test_vlm_mixed_verdicts_across_scenes(monkeypatch, tmp_path):
         ),
     )
 
-    from paper2manim.graphs.mvp2 import build_mvp2_graph
+    from paper2manim.graphs.generation import build_generation_graph
 
-    g = build_mvp2_graph()
+    g = build_generation_graph()
     out = g.invoke(
         {
             "run_id": "vlm-mixed",

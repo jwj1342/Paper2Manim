@@ -1,6 +1,6 @@
 """Shared voiceover assembly — TTS synthesis, audio alignment, concat, mux.
 
-Used by both MVP1 and MVP2 ``assemble_av_node`` so the two graphs don't
+Used by both Demo and Generation ``assemble_av_node`` so the two graphs don't
 duplicate the same ~200 lines of TTS/alignment/mux logic.
 
 Per the fix-plan §Mod 3, aligned audio is **guaranteed** to match the target

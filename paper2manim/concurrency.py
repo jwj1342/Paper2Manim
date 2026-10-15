@@ -1,6 +1,6 @@
 """Process-global throttles for parallel scene execution.
 
-When ``--scene-parallelism > 1`` the MVP 2.0 graph fans out scenes via
+When ``--scene-parallelism > 1`` the Generation pipeline graph fans out scenes via
 ``langgraph.types.Send``; LangGraph runs the branches on its internal thread
 pool. Two resources need explicit bounding:
 

@@ -3,7 +3,7 @@
 The EMB persists two polarities of records:
 
 * ``success``: Final high-score scenes (Rationale + complete code + frame hash)
-  produced by §4.4a of the research proposal. Retrieved as soft-constraint
+  produced by positive memory of the paper. Retrieved as soft-constraint
   *Reference Examples* during Coder generation.
 * ``failure``: ``before → after`` reflection transitions that strictly improved
   VLM score (or moved from render-error to render-success). Distilled into

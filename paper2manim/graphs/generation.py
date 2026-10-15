@@ -1,4 +1,4 @@
-"""MVP 2.0 graph: PDF/arXiv -> parser -> summarizer -> storyboarder ->
+"""Generation pipeline graph: PDF/arXiv -> parser -> summarizer -> storyboarder ->
                  [Send fan-out × N_scenes -> scene_graph] ->
                  concat -> emb_consolidate -> END.
 
@@ -30,7 +30,7 @@ from paper2manim.emb.distill import consolidate_run, infer_source_metadata
 from paper2manim.graphs.scene_graph import _emb_for_state as _scene_emb_for_state
 from paper2manim.graphs.scene_graph import get_compiled_scene_graph
 from paper2manim.llm import tts_config as get_tts_config
-from paper2manim.parsers import parse_arxiv, parse_local_pdf
+from paper2manim.parsers import ParsedInput, parse_arxiv, parse_local_pdf
 from paper2manim.state import PaperState
 from paper2manim.voiceover.assembly import assemble_voiceover
 
@@ -45,13 +45,17 @@ def parser_node(state: PaperState) -> dict[str, Any]:
             if not spec:
                 return {"fatal_error": "parser: arxiv_spec missing"}
             parsed = parse_arxiv(spec, section=state.get("arxiv_section"))
+        elif kind == "text":
+            parsed = ParsedInput(text=state.get("raw_text") or "", fmt="markdown", source="text")
         elif kind == "pdf":
             pdf = state.get("pdf_path")
             if not pdf:
                 return {"fatal_error": "parser: pdf_path missing"}
             parsed = parse_local_pdf(pdf)
         else:
-            return {"fatal_error": f"parser: unsupported input_kind {kind!r} for MVP 2.0"}
+            return {
+                "fatal_error": f"parser: unsupported input_kind {kind!r} for Generation pipeline"
+            }
     except Exception as exc:  # arxiv download error / Marker import error / etc.
         return {"fatal_error": f"parser: {type(exc).__name__}: {exc}"}
 
@@ -67,6 +71,7 @@ def parser_node(state: PaperState) -> dict[str, Any]:
         "parsed_markdown": parsed.text,
         "parsed_format": parsed.fmt,
         "parser_source": parsed.source,
+        "task_text": parsed.text,
     }
 
 
@@ -89,11 +94,11 @@ def _make_scene_payload(state: PaperState, idx: int) -> dict[str, Any]:
         "run_id": state.get("run_id", ""),
         "storyboard": sb,
         "current_scene_idx": idx,
-        "scene": scene,
+        "scene": {**scene, "paper_role": state.get("scene_role", "BACKGROUND")},
         "summary": state.get("summary"),
         "quality": state.get("quality", "l"),
         "skip_render": bool(state.get("skip_render", False)),
-        "max_retries": int(state.get("max_retries", 3)),
+        "max_retries": int(state.get("max_retries", 2)),
         "max_visual_revisions": int(state.get("max_visual_revisions", 2)),
         "vlm_enabled": bool(state.get("vlm_enabled", False)),
         # EMB context (forwarded so each scene's emb_retrieve resolves the same
@@ -102,15 +107,19 @@ def _make_scene_payload(state: PaperState, idx: int) -> dict[str, Any]:
         "emb_store_path": state.get("emb_store_path"),
         "emb_use_faiss": bool(state.get("emb_use_faiss", True)),
         "emb_use_real_embedder": bool(state.get("emb_use_real_embedder", True)),
+        "emb_readonly": bool(state.get("emb_readonly", False)),
+        "emb_k_success": state.get("emb_k_success", 2),
+        "emb_k_failure": state.get("emb_k_failure", 3),
+        "task_text": state.get("task_text") or state.get("parsed_markdown", ""),
+        "scene_role": state.get("scene_role", "BACKGROUND"),
         "emb_instance": state.get("emb_instance"),
-        # B6 channel ablation: forwarded so per-scene emb_retrieve_node sees
-        # the same toggles. Write-side toggles stay on PaperState (used by
-        # parent emb_consolidate_node).
+        # Apply channel switches consistently to retrieval and consolidation.
         "emb_no_success_channel": bool(state.get("emb_no_success_channel", False)),
         "emb_no_failure_channel": bool(state.get("emb_no_failure_channel", False)),
         # Per-scene mutables — start fresh for each fan-out branch
         "current_code": None,
         "iter_count": 0,
+        "text_retry_count": 0,
         "error_feedback": None,
         "vlm_revision_count": 0,
         "current_montage_path": None,
@@ -154,7 +163,7 @@ def run_scene_node(payload: dict[str, Any]) -> dict[str, Any]:
     # Per-scene recursion budget: worst-case = 1 emb_retrieve + (1+max_retries)
     # × (coder+render+reviewer) + (frame_sampler+vlm_review+visual_revise) ×
     # max_visual_revisions. Give a healthy multiplier.
-    max_retries = int(payload.get("max_retries", 3))
+    max_retries = int(payload.get("max_retries", 2))
     max_vrev = int(payload.get("max_visual_revisions", 2))
     recursion_limit = max(60, 6 + 3 * (max_retries + 1) + 5 * max_vrev + 4)
     try:
@@ -172,6 +181,10 @@ def run_scene_node(payload: dict[str, Any]) -> dict[str, Any]:
             ],
         }
 
+    if payload.get("skip_render"):
+        return {
+            "scene_reports": [{"scene": scene_name, "status": "code_only", "reflection_rounds": 0}]
+        }
     attempts = final.get("attempts", [])
     last_rr = attempts[-1].get("render_result", {}) if attempts else {}
     renditions = final.get("scene_renditions", []) or []
@@ -191,27 +204,38 @@ def run_scene_node(payload: dict[str, Any]) -> dict[str, Any]:
                 "n_attempts": len(attempts),
                 "final_status": last_rr.get("status"),
                 "v_revs": final.get("vlm_revision_count", 0),
+                "text_retries": final.get("text_retry_count", 0),
+                "reflection_rounds": final.get("text_retry_count", 0)
+                + final.get("vlm_revision_count", 0),
                 # Per-scene VLM verdict (post-parallelism, this is the place
                 # to read scene-keyed VLM decisions from PaperState).
                 "last_visual_review": final.get("last_visual_review"),
+                "visual_revision_error": final.get("visual_revision_error"),
             }
         ],
     }
-    if last_rr.get("status") == "success" and last_rr.get("video_path"):
+    chosen = _pick_best_rendition(renditions, scene_name)
+    successful = [
+        a["render_result"]
+        for a in attempts
+        if a.get("render_result", {}).get("status") == "success"
+        and a["render_result"].get("video_path")
+    ]
+    fallback = successful[-1] if successful else {}
+    if chosen or fallback:
         # Best-of-N: when the VLM scored multiple renditions, ship the
         # highest-scoring video — not the most recent. The visual-revise loop
-        # sometimes produces a strictly worse v(N+1) (see
-        # docs/vlm_experiment.md regression case); shipping the latest in that
+        # sometimes produces a strictly worse v(N+1); shipping the latest in that
         # case puts a worse video in ``rendered_videos`` AND a worse code in
         # EMB.success (because emb/distill.py:find_scored_scenes already picks
         # the highest-VLM-avg v_rev). Aligning ``rendered_videos`` with the
         # same v_rev keeps the two artifacts coherent.
-        chosen = _pick_best_rendition(renditions, scene_name) or {
-            "video_path": last_rr["video_path"],
+        chosen = chosen or {
+            "video_path": fallback["video_path"],
             "v_rev": final.get("vlm_revision_count", 0),
             "avg_score": None,
         }
-        chosen_video = chosen.get("video_path") or last_rr["video_path"]
+        chosen_video = chosen.get("video_path") or fallback["video_path"]
         updates["rendered_videos"] = [chosen_video]
         # Structured record for voiceover: {scene, video_path, duration_s}.
         # Duration is probed later in assemble_av; store None here as a
@@ -262,9 +286,7 @@ def run_scene_node(payload: dict[str, Any]) -> dict[str, Any]:
     return updates
 
 
-def _pick_best_rendition(
-    renditions: list[dict], scene_name: str
-) -> dict | None:
+def _pick_best_rendition(renditions: list[dict], scene_name: str) -> dict | None:
     """Return the highest-``avg_score`` rendition for ``scene_name``, or None.
 
     Renditions without a usable ``video_path`` or with ``avg_score is None``
@@ -275,10 +297,9 @@ def _pick_best_rendition(
     to "last attempt" semantics in that case.
     """
     eligible = [
-        r for r in renditions
-        if r.get("scene") == scene_name
-        and r.get("video_path")
-        and r.get("avg_score") is not None
+        r
+        for r in renditions
+        if r.get("scene") == scene_name and r.get("video_path") and r.get("avg_score") is not None
     ]
     if not eligible:
         return None
@@ -300,6 +321,8 @@ def assemble_av_node(state: PaperState) -> dict[str, Any]:
     for the voiceover path. When voiceover is off, this is a thin wrapper
     around ``concat_videos`` (identical to the old ``concat_node``).
     """
+    if state.get("skip_render"):
+        return {}
     voiceover_enabled = bool(state.get("voiceover_enabled", False))
 
     scene_videos = state.get("rendered_scene_videos", [])
@@ -339,19 +362,14 @@ def assemble_av_node(state: PaperState) -> dict[str, Any]:
 
 
 def emb_consolidate_node(state: PaperState) -> dict[str, Any]:
-    """End-of-run §4.4 sink: distill the trace into success/failure records.
-
-    ``emb_readonly`` (B6) short-circuits this node — required by RQ3
-    cross-domain test phase so the frozen Domain-A EMB doesn't absorb
-    Domain-B records mid-experiment. The retrieve path stays active so prior
-    records still inject into the Coder prompt; only WRITE is frozen.
-    """
-    if not state.get("emb_enabled"):
+    """Distill validated scene experience unless memory writes are disabled."""
+    if not state.get("emb_enabled") or state.get("skip_render"):
         return {}
     if state.get("emb_readonly"):
         try:
             append_trace(
-                state.get("run_id", ""), "emb_consolidate",
+                state.get("run_id", ""),
+                "emb_consolidate",
                 {"skipped": True, "reason": "emb_readonly"},
             )
         except Exception:  # noqa: BLE001
@@ -374,22 +392,13 @@ def emb_consolidate_node(state: PaperState) -> dict[str, Any]:
     if not run_id:
         return {}
     source_paper, source_section = infer_source_metadata(state)
-    use_llm = bool(state.get("emb_use_llm_distillers", False))
-    rw = None
-    ld = None
-    if use_llm:
-        from paper2manim.agents.lesson_distiller import distill_lesson_llm
-        from paper2manim.agents.rationale_writer import write_rationale_llm
-
-        rw = write_rationale_llm
-        ld = distill_lesson_llm
-    # Defaults match emb/distill.py on the proposal §4.2 0–100 schema; CLI
+    # Defaults match emb/distill.py on the three-axis scoring 0–100 schema; CLI
     # `--emb-theta-high` / `--emb-failure-min-margin` should already be in this
     # range, but a stale state dict (older test fixture, hand-built invocation)
     # falls back to these.
     theta = float(state.get("emb_theta_high", 85.0))
     fail_margin = float(state.get("emb_failure_min_margin", 5.0))
-    domain = state.get("dataset_domain") or ""
+    domain = state.get("domain") or ""
     skip_success = bool(state.get("emb_no_success_channel", False))
     skip_failure = bool(state.get("emb_no_failure_channel", False))
     try:
@@ -400,8 +409,6 @@ def emb_consolidate_node(state: PaperState) -> dict[str, Any]:
             theta_high=theta,
             source_paper=source_paper,
             source_section=source_section,
-            rationale_writer=rw,
-            lesson_distiller=ld,
             failure_min_margin=fail_margin,
             domain=domain,
             skip_success=skip_success,
@@ -457,7 +464,7 @@ def _post_narrator(state: PaperState) -> list[Send] | str:
 # --------------------------------------------------------------------------- #
 
 
-def build_mvp2_graph():
+def build_generation_graph():
     g = StateGraph(PaperState)
     g.add_node("parser", parser_node)
     g.add_node("summarizer", summarizer_node)
@@ -469,9 +476,17 @@ def build_mvp2_graph():
 
     g.set_entry_point("parser")
 
-    for src, dst in [("parser", "summarizer"), ("summarizer", "storyboarder")]:
-        pred, mapping = _is_fatal(dst)
-        g.add_conditional_edges(src, pred, mapping)
+    g.add_conditional_edges(
+        "parser",
+        lambda state: (
+            END
+            if state.get("fatal_error")
+            else ("storyboarder" if state.get("input_kind") == "text" else "summarizer")
+        ),
+        {END: END, "storyboarder": "storyboarder", "summarizer": "summarizer"},
+    )
+    pred, mapping = _is_fatal("storyboarder")
+    g.add_conditional_edges("summarizer", pred, mapping)
 
     # Storyboarder → narrator (voiceover on) or direct fan-out to run_scene
     # (voiceover off). Both routes end at END on fatal/no-scenes.
@@ -482,9 +497,7 @@ def build_mvp2_graph():
     )
 
     # Narrator → fan-out to run_scene (or END on fatal/no-scenes).
-    g.add_conditional_edges(
-        "narrator", _post_narrator, {"run_scene": "run_scene", END: END}
-    )
+    g.add_conditional_edges("narrator", _post_narrator, {"run_scene": "run_scene", END: END})
 
     # After all run_scene branches finish, assemble_av → emb_consolidate → END.
     g.add_edge("run_scene", "assemble_av")
@@ -495,7 +508,7 @@ def build_mvp2_graph():
 
 __all__ = [
     "assemble_av_node",
-    "build_mvp2_graph",
+    "build_generation_graph",
     "emb_consolidate_node",
     "fan_out_scenes",
     "parser_node",

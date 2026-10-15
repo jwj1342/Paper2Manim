@@ -1,4 +1,4 @@
-"""Reflection-loop tests for the MVP 2.0 graph (mocks LLM + render)."""
+"""Reflection-loop tests for the Generation pipeline graph (mocks LLM + render)."""
 
 from unittest.mock import MagicMock
 
@@ -62,7 +62,7 @@ def stub_pipeline(monkeypatch):
     from paper2manim.parsers import ParsedInput
 
     monkeypatch.setattr(
-        "paper2manim.graphs.mvp2.parse_local_pdf",
+        "paper2manim.graphs.generation.parse_local_pdf",
         lambda p: ParsedInput(text="# Test paper\nbody", fmt="markdown", source="pdf:fake.pdf"),
     )
 
@@ -74,7 +74,7 @@ def stub_pipeline(monkeypatch):
         if render_calls["n"] <= 2:
             return {
                 "status": "error",
-                "category": "latex",
+                "category": "latex" if render_calls["n"] == 1 else "python",
                 "exit_code": 1,
                 "scene": scene,
                 "video_path": None,
@@ -107,7 +107,7 @@ def stub_pipeline(monkeypatch):
 
         from paper2manim.voiceover.assembly import VoiceoverAssemblyResult
 
-        run_id = kwargs.get("run_id", "mvp2-test")
+        run_id = kwargs.get("run_id", "generate-test")
         out = Path("runs") / run_id / "final" / "output.mp4"
         out.parent.mkdir(parents=True, exist_ok=True)
         out.write_bytes(b"\x00")
@@ -116,38 +116,38 @@ def stub_pipeline(monkeypatch):
             silent_video_path=str(out),
         )
 
-    monkeypatch.setattr("paper2manim.graphs.mvp2.assemble_voiceover", fake_assemble_voiceover)
+    monkeypatch.setattr("paper2manim.graphs.generation.assemble_voiceover", fake_assemble_voiceover)
     return {"render_calls": render_calls, "llm": llm}
 
 
-def test_mvp2_reflection_succeeds_after_two_retries(stub_pipeline, tmp_path):
-    from paper2manim.graphs.mvp2 import build_mvp2_graph
+def test_generate_reflection_succeeds_after_two_retries(stub_pipeline, tmp_path):
+    from paper2manim.graphs.generation import build_generation_graph
 
-    g = build_mvp2_graph()
+    g = build_generation_graph()
     state = {
-        "run_id": "mvp2-test",
+        "run_id": "generate-test",
         "input_kind": "pdf",
         "pdf_path": str(tmp_path / "fake.pdf"),
         "attempts": [],
         "rendered_videos": [],
         "current_scene_idx": 0,
         "iter_count": 0,
-        "max_retries": 4,
+        "max_retries": 2,
         "quality": "l",
         "skip_render": False,
     }
     out = g.invoke(state, config={"recursion_limit": 80})
 
-    # 2 latex failures + 1 success = 3 attempts
+    # Two different fault categories + one success = 3 attempts
     assert stub_pipeline["render_calls"]["n"] == 3
     assert len(out["attempts"]) == 3
     assert out["attempts"][-1]["render_result"]["status"] == "success"
     assert out.get("final_video_path", "").endswith(".mp4")
 
 
-def test_mvp2_reflection_gives_up_at_cap(stub_pipeline, tmp_path, monkeypatch):
+def test_generate_reflection_gives_up_at_cap(stub_pipeline, tmp_path, monkeypatch):
     """If max_retries=1, the loop should give up after one retry."""
-    from paper2manim.graphs.mvp2 import build_mvp2_graph
+    from paper2manim.graphs.generation import build_generation_graph
 
     # Force render to always fail
     def always_fail(code, scene, **kw):
@@ -167,9 +167,9 @@ def test_mvp2_reflection_gives_up_at_cap(stub_pipeline, tmp_path, monkeypatch):
 
     monkeypatch.setattr("paper2manim.graphs.scene_graph.render", always_fail)
 
-    g = build_mvp2_graph()
+    g = build_generation_graph()
     state = {
-        "run_id": "mvp2-give-up",
+        "run_id": "generate-give-up",
         "input_kind": "pdf",
         "pdf_path": str(tmp_path / "fake.pdf"),
         "attempts": [],
@@ -190,20 +190,20 @@ def test_mvp2_reflection_gives_up_at_cap(stub_pipeline, tmp_path, monkeypatch):
     assert out.get("skipped_scenes") == ["OneScene"]
 
 
-def test_mvp2_early_exit_on_parser_fatal(monkeypatch):
+def test_generate_early_exit_on_parser_fatal(monkeypatch):
     """C2 regression: a fatal_error set by parser must short-circuit to END,
     not cascade through summarizer/storyboarder/coder/render.
 
     Note: nodes are bound into the graph at build time, so we must monkeypatch
-    BEFORE calling build_mvp2_graph().
+    BEFORE calling build_generation_graph().
     """
-    from paper2manim.graphs import mvp2 as mvp2_mod
+    from paper2manim.graphs import generation as generate_mod
 
     # 1) Parser sets fatal_error
     def parser_sets_fatal(state):
         return {"fatal_error": "parser: pdf missing"}
 
-    monkeypatch.setattr(mvp2_mod, "parser_node", parser_sets_fatal)
+    monkeypatch.setattr(generate_mod, "parser_node", parser_sets_fatal)
 
     # 2) Sentinels for the remaining top-level nodes. The per-scene loop has
     # moved into a sub-graph (scene_graph), so individual reflection nodes
@@ -226,10 +226,10 @@ def test_mvp2_early_exit_on_parser_fatal(monkeypatch):
         return fn
 
     for name in called:
-        monkeypatch.setattr(mvp2_mod, f"{name}_node", make_sentinel(name))
+        monkeypatch.setattr(generate_mod, f"{name}_node", make_sentinel(name))
 
     # 3) Build graph AFTER patching, so the patched functions are bound
-    g = mvp2_mod.build_mvp2_graph()
+    g = generate_mod.build_generation_graph()
     out = g.invoke(
         {
             "run_id": "early-exit",

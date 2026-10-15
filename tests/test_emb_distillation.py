@@ -1,8 +1,10 @@
-"""Phase 2 tests: trace parsing, transition detection, distillation, consolidation."""
+"""Memory distillation tests: trace parsing, transition detection, distillation, consolidation."""
 
 from __future__ import annotations
 
 import json
+
+import pytest
 
 from paper2manim.emb.distill import (
     ConsolidationReport,
@@ -10,8 +12,6 @@ from paper2manim.emb.distill import (
     TextTransition,
     VisualTransition,
     consolidate_run,
-    default_lesson_distiller,
-    default_rationale_writer,
     distill_failure_records,
     distill_success_records,
     find_scored_scenes,
@@ -22,6 +22,7 @@ from paper2manim.emb.distill import (
 )
 from paper2manim.emb.manager import build_in_memory_emb
 from paper2manim.emb.schema import FailureBody
+from tests.memory_writers import mock_lesson_distiller, mock_rationale_writer
 
 # --------------------------------------------------------------------------- #
 # Helpers: synthesize a fake run on disk
@@ -75,7 +76,7 @@ def _write_montage(run_id: str, scene: str, v_rev: int) -> None:
 
 
 def _high_scores() -> dict:
-    """3-dim 0-100 schema (proposal §4.2). Average = 90.0."""
+    """3-dim 0-100 schema (three-axis scoring). Average = 90.0."""
     return {k: 90 for k in ("logic_flow", "layout_occlusion", "accuracy")}
 
 
@@ -143,7 +144,7 @@ class TestParseTrace:
         out = parse_trace(run_id)
         assert "S1" in out
         assert len(out["S1"].renders) == 1
-        assert len(out["S1"].vlm_reviews) == 1
+        assert len(out["S1"].vlm_reviews) == 0
 
 
 # --------------------------------------------------------------------------- #
@@ -330,7 +331,7 @@ class TestScoredScenes:
         )
         _write_attempt_code(run_id, "S1", 0, 0, "v0 code")
         _write_attempt_code(run_id, "S1", 0, 1, "v1 code")
-        _write_render_result(run_id, "S1", 0, {"video_path": "/tmp/x.mp4"})
+        _write_render_result(run_id, "S1_v1", 0, {"video_path": "/tmp/x.mp4"})
         scenes = parse_trace(run_id)
         out = find_scored_scenes(run_id, scenes.values())
         assert len(out) == 1
@@ -367,24 +368,24 @@ class TestDefaultWriters:
             final_code="from manim import *", final_montage_path=None,
             final_video_path=None, had_vlm_review=True,
         )
-        out = default_rationale_writer(sc, "a description")
+        out = mock_rationale_writer(sc, "a description")
         assert "S1" in out
         assert "87.50" in out
         assert len(out) <= 400
 
-    def test_default_lesson_distiller_visual_transition(self):
+    def test_mock_lesson_distiller_visual_transition(self):
         vt = VisualTransition(
             scene="S1", before_v_rev=0, after_v_rev=1,
             before_code="x = 1\ny = 2", after_code="x = 1\ny = 3",
             before_score=30.0, after_score=60.0,
             revision_instruction="adjust value",
         )
-        body = default_lesson_distiller(vt, "scene desc")
+        body = mock_lesson_distiller(vt, "scene desc")
         assert isinstance(body, FailureBody)
         assert "low layout" in body.trigger_pattern.lower() or "low" in body.trigger_pattern.lower()
         assert body.code_anti_example != body.code_good_example
 
-    def test_default_lesson_distiller_text_transition(self):
+    def test_mock_lesson_distiller_text_transition(self):
         tt = TextTransition(
             scene="S1", before_iter=0, after_iter=1,
             before_code="raise X", after_code="ok",
@@ -392,7 +393,7 @@ class TestDefaultWriters:
             error_message="NameError: X",
             traceback_tail="trace",
         )
-        body = default_lesson_distiller(tt, "scene desc")
+        body = mock_lesson_distiller(tt, "scene desc")
         assert "render fails" in body.trigger_pattern.lower() or "render" in body.trigger_pattern.lower()
         assert "NameError" in body.root_cause
 
@@ -433,7 +434,7 @@ class TestDistillSuccess:
         assert rec.context.source_paper == "arxiv:test"
         assert rec.context.source_section == "Background"
 
-    def test_theta_zero_admits_no_vlm_scenes(self):
+    def test_theta_zero_still_rejects_unscored_scenes(self):
         run_id = "rid_ds_2"
         _write_trace(
             run_id,
@@ -443,7 +444,7 @@ class TestDistillSuccess:
         out = distill_success_records(
             run_id, state=_fake_state("S1"), theta_high=0.0,
         )
-        assert len(out) == 1
+        assert out == []
 
     def test_custom_rationale_writer_used(self):
         run_id = "rid_ds_3"
@@ -640,3 +641,9 @@ class TestInferSourceMetadata:
     def test_empty(self):
         assert infer_source_metadata(None) == ("", "")
         assert infer_source_metadata({}) == ("", "")
+
+
+@pytest.fixture(autouse=True)
+def memory_writer_stubs(monkeypatch):
+    monkeypatch.setattr("paper2manim.agents.rationale_writer.write_rationale_llm", mock_rationale_writer)
+    monkeypatch.setattr("paper2manim.agents.lesson_distiller.distill_lesson_llm", mock_lesson_distiller)

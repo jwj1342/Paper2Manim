@@ -3,7 +3,7 @@
 Two provider styles are supported, selected by :attr:`ModelConfig.provider`:
 
 * ``openai_compatible`` — OpenAI ``/chat/completions`` with ``image_url`` content
-  block (Doubao Ark, OpenAI, MiMo if it ever gains vision).
+  block.
 * ``anthropic`` — Anthropic Messages API with ``image`` content block; sends
   ``Authorization: Bearer`` when ``ModelConfig.auth_style == "bearer"`` (Azure).
 

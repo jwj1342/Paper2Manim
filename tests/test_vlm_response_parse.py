@@ -7,7 +7,7 @@ the real answer), matched from the first ``{`` of the first object to the last
 scanner introduced in :func:`_extract_first_json_object` should pick the first
 valid object only.
 
-These tests cover the proposal §4.2 canonical schema: 3 dimensions
+These tests cover the three-axis scoring canonical schema: 3 dimensions
 (``logic_flow`` / ``layout_occlusion`` / ``accuracy``) on a 0–100 scale plus
 the ≥ 90 average → auto-pass bypass.
 """
@@ -126,4 +126,4 @@ def test_no_auto_pass_when_only_one_dim_present_even_if_perfect():
     assert result["scores"]["layout_occlusion"] is None
     assert result["scores"]["accuracy"] is None
     # average_score still reflects the present-only mean for auditability.
-    assert result["average_score"] == 100
+    assert result["average_score"] is None

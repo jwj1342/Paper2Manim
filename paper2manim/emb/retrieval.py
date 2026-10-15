@@ -28,8 +28,8 @@ log = logging.getLogger(__name__)
 
 # Hard limits — keep injected blocks compact so they don't blow the prompt.
 _MAX_CODE_FULL_CHARS = 1200
-_MAX_CODE_FRAGMENT_CHARS = 400
-_MAX_RATIONALE_CHARS = 400
+_MAX_CODE_FRAGMENT_CHARS = 800
+_MAX_RATIONALE_CHARS = 600
 
 
 @dataclass
@@ -78,22 +78,19 @@ def retrieve_for_scene(
 ) -> RetrievalBundle:
     """Top-k for each polarity. Empty EMB → empty bundle, no exception.
 
-    ``domain_filter`` (RQ3 / §8.3 Ablation E) restricts hits to records whose
-    ``context.domain`` matches. ``None`` (default) is the proposal-spec
-    behavior — RQ3 cross-domain experiments WANT Domain B to retrieve Domain
-    A's records, so leave the filter off unless explicitly isolating.
-
-    ``skip_success`` / ``skip_failure`` short-circuit the polarity being
-    ablated. Used by ``--emb-no-success-channel`` / ``--emb-no-failure-channel``
-    so the channel disappears from retrieval (in addition to writes), and
-    stale records can't contaminate the ablation.
+    ``domain_filter`` optionally limits hits to a domain label. By default,
+    retrieval searches records across all domains.
     """
     try:
-        s_hits = [] if skip_success else emb.query(
-            scene_text, polarity="success", k=k_success, bump_hit=bump_hit
+        s_hits = (
+            []
+            if skip_success
+            else emb.query(scene_text, polarity="success", k=k_success, bump_hit=bump_hit)
         )
-        f_hits = [] if skip_failure else emb.query(
-            scene_text, polarity="failure", k=k_failure, bump_hit=bump_hit
+        f_hits = (
+            []
+            if skip_failure
+            else emb.query(scene_text, polarity="failure", k=k_failure, bump_hit=bump_hit)
         )
     except Exception as exc:  # noqa: BLE001 — never let RAG crash the graph
         log.warning("[emb.retrieve] query failed (%s) — degrading to zero-shot", exc)
@@ -138,12 +135,11 @@ def render_reference_examples_block(
 ) -> str:
     """Format success records into the *Reference Examples* prompt section.
 
-    Returns an empty string when there are no records, so the caller can
-    safely concat it unconditionally.
+    Empty banks retain the slot with an explicit empty marker.
     """
     items = list(records)
     if not items:
-        return ""
+        return "## Reference Examples (past successful scenes; treat as guidance, not literal copy)\n[No entries available]\n"
     lines: list[str] = []
     lines.append(
         "## Reference Examples (past successful scenes; treat as guidance, not literal copy)\n"
@@ -174,7 +170,7 @@ def render_known_pitfalls_block(
     """
     items = list(records)
     if not items:
-        return ""
+        return "## Known Pitfalls (validated failure→success transitions; AVOID the anti-pattern)\n[No entries available]\n"
     lines: list[str] = []
     lines.append(
         "## Known Pitfalls (validated failure→success transitions; AVOID the anti-pattern)\n"
@@ -184,15 +180,18 @@ def render_known_pitfalls_block(
         body = rec["body"]
         source = _format_source(rec.get("provenance"), rec.get("context"))
         sim = float(rec.get("similarity", 0.0))
-        trigger = _truncate(str(body.get("trigger_pattern", "")), 300)
-        cause = _truncate(str(body.get("root_cause", "")), 300)
-        fix = _truncate(str(body.get("fix_recipe", "")), 300)
+        trigger = _truncate(str(body.get("trigger_pattern", "")), 400)
+        cause = _truncate(str(body.get("root_cause", "")), 400)
+        fix = _truncate(str(body.get("fix_recipe", "")), 400)
         anti = _truncate(str(body.get("code_anti_example", "")), _MAX_CODE_FRAGMENT_CHARS)
+        diagnostic = _truncate(str(body.get("vlm_diagnostic", "")), 1000)
         good = _truncate(str(body.get("code_good_example", "")), _MAX_CODE_FRAGMENT_CHARS)
         lines.append(f"\n### Pitfall {i} — similarity {sim:.2f}, source: {source}\n")
         lines.append(f"- Trigger: {trigger}\n")
         lines.append(f"- Root cause: {cause}\n")
         lines.append(f"- Fix: {fix}\n")
+        if diagnostic:
+            lines.append(f"- Diagnostic: {diagnostic}\n")
         if anti:
             lines.append(f"\nAnti-example (do NOT do this):\n```python\n{anti}\n```\n")
         if good:

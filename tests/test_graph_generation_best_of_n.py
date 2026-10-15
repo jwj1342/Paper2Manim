@@ -1,14 +1,14 @@
-"""B5 (v2): visual best-of-N on the fan-out topology.
+"""Regression: visual best-of-N on the fan-out topology.
 
-The visual-revise loop sometimes produces a strictly worse v(N+1) (see the
-v1=85 → v2=60 regression case in ``docs/vlm_experiment.md``). Pre-B5 the
+The visual-revise loop sometimes produces a strictly worse v(N+1), such as
+v1=85 → v2=60. Previously the
 parent-side ``run_scene_node`` blindly took the most recent attempt's
 ``video_path`` for ``rendered_videos`` — meaning the worse video shipped to
 the user *and* the worse code wound up in EMB.success (because
 ``emb/distill.py:find_scored_scenes`` already picks the highest-VLM-avg
 ``v_rev`` from disk).
 
-Post-B5 the per-scene subgraph appends a ``rendition`` per VLM review
+Now the per-scene subgraph appends a ``rendition`` per VLM review
 (``{scene, v_rev, video_path, code, avg_score, decision}``), and
 ``run_scene_node`` calls ``_pick_best_rendition`` to ship the highest-scoring
 version. This re-aligns the final video with the EMB record's chosen v_rev.
@@ -18,7 +18,7 @@ Tests:
 2. End-to-end via mocked VLM scoring 70 → 85 → 60 — assert ``rendered_videos``
    is the v1 (85-scored) mp4, not v2 (60).
 3. End-to-end with VLM off (no renditions emitted) — falls back to the
-   pre-B5 "last attempt" path so legacy callers are unaffected.
+   previous "last attempt" path so legacy callers are unaffected.
 4. Trace audit — when best != last, an ``advance`` event records both.
 """
 
@@ -45,7 +45,7 @@ class TestPickBestRendition:
         }
 
     def test_highest_score_wins(self):
-        from paper2manim.graphs.mvp2 import _pick_best_rendition
+        from paper2manim.graphs.generation import _pick_best_rendition
 
         rs = [
             self._r(v_rev=0, score=70.0, video="v0.mp4"),
@@ -58,7 +58,7 @@ class TestPickBestRendition:
         assert chosen["video_path"] == "v1.mp4"
 
     def test_filters_by_scene_name(self):
-        from paper2manim.graphs.mvp2 import _pick_best_rendition
+        from paper2manim.graphs.generation import _pick_best_rendition
 
         rs = [
             self._r(v_rev=0, score=99.0, video="other.mp4", scene="OTHER"),
@@ -69,7 +69,7 @@ class TestPickBestRendition:
         assert chosen["video_path"] == "s1.mp4"
 
     def test_skips_ineligible_no_score(self):
-        from paper2manim.graphs.mvp2 import _pick_best_rendition
+        from paper2manim.graphs.generation import _pick_best_rendition
 
         rs = [
             self._r(v_rev=0, score=None, video="v0.mp4"),  # auto-pass / no review
@@ -79,7 +79,7 @@ class TestPickBestRendition:
         assert chosen is not None and chosen["v_rev"] == 1
 
     def test_skips_ineligible_no_video(self):
-        from paper2manim.graphs.mvp2 import _pick_best_rendition
+        from paper2manim.graphs.generation import _pick_best_rendition
 
         rs = [
             self._r(v_rev=0, score=85.0, video=None),  # frame_sampler failed
@@ -91,7 +91,7 @@ class TestPickBestRendition:
     def test_returns_none_when_all_ineligible(self):
         """All scores None → no comparable basis. Caller falls back to last
         attempt; must not crash, must not arbitrarily pick one."""
-        from paper2manim.graphs.mvp2 import _pick_best_rendition
+        from paper2manim.graphs.generation import _pick_best_rendition
 
         rs = [
             self._r(v_rev=0, score=None, video="v0.mp4"),
@@ -100,14 +100,14 @@ class TestPickBestRendition:
         assert _pick_best_rendition(rs, "S1") is None
 
     def test_returns_none_for_empty(self):
-        from paper2manim.graphs.mvp2 import _pick_best_rendition
+        from paper2manim.graphs.generation import _pick_best_rendition
 
         assert _pick_best_rendition([], "S1") is None
 
     def test_tie_breaks_to_earlier_v_rev(self):
         """Same score, earlier v_rev wins — don't reward a tie that includes
         a regression-then-recovery cycle (v0=85, v1=80, v2=85 → still v0)."""
-        from paper2manim.graphs.mvp2 import _pick_best_rendition
+        from paper2manim.graphs.generation import _pick_best_rendition
 
         rs = [
             self._r(v_rev=0, score=85.0, video="v0.mp4"),
@@ -184,7 +184,7 @@ def best_of_n_pipeline(monkeypatch, tmp_path):
     from paper2manim.parsers import ParsedInput
 
     monkeypatch.setattr(
-        "paper2manim.graphs.mvp2.parse_local_pdf",
+        "paper2manim.graphs.generation.parse_local_pdf",
         lambda p: ParsedInput(text="# T", fmt="markdown", source="pdf:fake"),
     )
 
@@ -225,7 +225,7 @@ def best_of_n_pipeline(monkeypatch, tmp_path):
             silent_video_path=str(out),
         )
 
-    monkeypatch.setattr("paper2manim.graphs.mvp2.assemble_voiceover", fake_assemble_voiceover)
+    monkeypatch.setattr("paper2manim.graphs.generation.assemble_voiceover", fake_assemble_voiceover)
 
     def fake_revise(*a, **kw):
         return (
@@ -238,9 +238,9 @@ def best_of_n_pipeline(monkeypatch, tmp_path):
 
 
 def _run_graph(initial_state):
-    from paper2manim.graphs.mvp2 import build_mvp2_graph
+    from paper2manim.graphs.generation import build_generation_graph
 
-    g = build_mvp2_graph()
+    g = build_generation_graph()
     return g.invoke(initial_state, config={"recursion_limit": 80})
 
 
@@ -271,7 +271,7 @@ def test_best_of_n_ships_v1_not_regressed_v2(best_of_n_pipeline, monkeypatch, tm
     - v1 review:  score=85, decision=revise → v2 produced (worse than v1)
     - v2 review:  score=60, decision=pass   → loop ends
 
-    Pre-B5: ``rendered_videos[0]`` is v2's mp4 (the worst!). Post-B5: v1's.
+    Previously: ``rendered_videos[0]`` is v2's mp4 (the worst!). Now: v1's.
     """
     scripted = [
         {"average_score": 70.0, "decision": "revise"},
@@ -316,8 +316,8 @@ def test_best_of_n_ships_v1_not_regressed_v2(best_of_n_pipeline, monkeypatch, tm
 
 
 def test_legacy_no_vlm_falls_back_to_last_attempt(best_of_n_pipeline, monkeypatch, tmp_path):
-    """When VLM is off, no rendition is emitted — must keep pre-B5 behavior
-    so MVP-2-style runs (no VLM judge) are unaffected."""
+    """When VLM is off, no rendition is emitted — must keep previous behavior
+    so non-VLM runs (no VLM judge) are unaffected."""
     state = _initial_state("no-vlm", tmp_path)
     state["vlm_enabled"] = False
 

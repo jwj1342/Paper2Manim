@@ -1,4 +1,4 @@
-"""B1 regression tests: EMB distill is locked to the proposal §4.2 3-dim 0-100 schema.
+"""Score-schema regression tests: EMB distill is locked to the three-axis scoring 3-dim 0-100 schema.
 
 Pre-fix bug: ``_SCORE_KEYS`` carried the old 6-dim 1-5 names while
 ``vlm_scene_reviewer`` already emitted the new 3-dim 0-100 keys, so
@@ -37,9 +37,10 @@ from paper2manim.emb.schema import (
     Provenance,
     SuccessBody,
 )
+from tests.memory_writers import mock_lesson_distiller, mock_rationale_writer
 
 # --------------------------------------------------------------------------- #
-# Helpers (mirror tests/test_emb_phase2.py for cohesion)
+# Helpers (mirror tests/test_emb_distillation.py for cohesion)
 # --------------------------------------------------------------------------- #
 
 
@@ -70,7 +71,7 @@ def _fake_state(*scene_names: str) -> dict:
 
 
 # --------------------------------------------------------------------------- #
-# 1. Score keys are the canonical proposal §4.2 schema
+# 1. Score keys are the canonical three-axis scoring schema
 # --------------------------------------------------------------------------- #
 
 
@@ -93,9 +94,9 @@ def test_avg_score_three_dim_full():
 
 
 def test_avg_score_three_dim_partial_missing_dim_treated_as_skip():
-    """One dim missing (None): mean over the present two, not zero-padded."""
+    """One dim missing (None): an incomplete review cannot qualify for memory."""
     s = {"logic_flow": 90, "layout_occlusion": None, "accuracy": 70}
-    assert _avg_score(s) == pytest.approx(80.0)
+    assert _avg_score(s) == 0.0
 
 
 def test_avg_score_legacy_six_dim_returns_zero():
@@ -122,7 +123,7 @@ def test_avg_score_empty_or_none():
 def test_avg_score_clamps_garbage_values():
     """Non-numeric values should be skipped, not crash."""
     s = {"logic_flow": "high", "layout_occlusion": 80, "accuracy": None}
-    assert _avg_score(s) == pytest.approx(80.0)
+    assert _avg_score(s) == 0.0
 
 
 # --------------------------------------------------------------------------- #
@@ -297,3 +298,9 @@ def test_emb_no_warning_on_clean_zero_to_one_hundred_store(caplog):
         EpisodicMemoryBank(store=emb._store, embedder=emb._embedder)
     drift_msgs = [r.message for r in caplog.records if "score schema drift" in r.message]
     assert not drift_msgs
+
+
+@pytest.fixture(autouse=True)
+def memory_writer_stubs(monkeypatch):
+    monkeypatch.setattr("paper2manim.agents.rationale_writer.write_rationale_llm", mock_rationale_writer)
+    monkeypatch.setattr("paper2manim.agents.lesson_distiller.distill_lesson_llm", mock_lesson_distiller)

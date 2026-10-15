@@ -34,17 +34,33 @@ FORBIDDEN_ATTRS = {
 FORBIDDEN_NAMES = {"Paragraph"}
 
 
-def validate_manim_code(code: str) -> None:
+def validate_manim_code(code: str, scene_name: str | None = None) -> None:
     if "from manim import *" not in code:
         raise ValueError("Generated code must include `from manim import *`.")
     if not re.search(r"class\s+\w+\s*\(\s*Scene\s*\)", code):
         raise ValueError("Generated code must define a Scene subclass.")
-    if code.count("self.play(") < 2:
-        raise ValueError("Generated code must contain multiple animation steps.")
-    if "self.add(" in code and "self.play(" not in code:
-        raise ValueError("Generated code cannot be static self.add + wait output.")
-
     tree = ast.parse(code)
+    scene_classes = [
+        node
+        for node in tree.body
+        if isinstance(node, ast.ClassDef)
+        and any(isinstance(base, ast.Name) and base.id == "Scene" for base in node.bases)
+    ]
+    if len(scene_classes) != 1 or (scene_name and scene_classes[0].name != scene_name):
+        raise ValueError(
+            f"Generated code must define exactly one Scene subclass named {scene_name!r}."
+        )
+    plays = [
+        node
+        for node in ast.walk(scene_classes[0])
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "play"
+        and isinstance(node.func.value, ast.Name)
+        and node.func.value.id == "self"
+    ]
+    if len(plays) < 2:
+        raise ValueError("Generated code must contain multiple animation steps.")
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             for alias in node.names:

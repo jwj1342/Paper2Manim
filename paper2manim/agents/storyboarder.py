@@ -27,15 +27,18 @@ def storyboarder_node(state: PaperState) -> dict[str, Any]:
     if not sb_text:
         return {"fatal_error": "storyboarder: no input (raw_text and summary both empty)"}
 
+    sb_text += f"\nRequested scene role: {state.get('scene_role', 'BACKGROUND')}"
     system = load_prompt("storyboarder")
-    llm = get_llm("flash", temperature=0.3)
+    llm = get_llm("scene_planner", temperature=0.3)
     log.info("[storyboarder] input chars=%d", len(sb_text))
     try:
         sb = safe_structured_invoke(
             llm, StoryboardModel, [("system", system), ("user", sb_text)], retries=1
         )
     except (OutputParserException, ValidationError) as exc:
-        return {"fatal_error": f"storyboarder: schema parse failed: {type(exc).__name__}: {str(exc)[:200]}"}
+        return {
+            "fatal_error": f"storyboarder: schema parse failed: {type(exc).__name__}: {str(exc)[:200]}"
+        }
     sb_dict = sb.model_dump()
 
     if state.get("run_id"):
@@ -46,4 +49,4 @@ def storyboarder_node(state: PaperState) -> dict[str, Any]:
             {"title": sb_dict["title"], "n_scenes": len(sb_dict["scenes"])},
         )
 
-    return {"storyboard": sb_dict, "current_scene_idx": 0, "iter_count": 0}
+    return {"storyboard": sb_dict}
